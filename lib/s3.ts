@@ -4,6 +4,8 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 let _client: S3Client | null = null;
 export function s3() {
   if (!_client) {
+    const missing = ["S3_ENDPOINT", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"].filter((k) => !process.env[k]);
+    if (missing.length) throw new Error(`Storage isn't configured: missing ${missing.join(", ")} in the Vercel environment variables`);
     _client = new S3Client({
       region: process.env.S3_REGION || "auto",
       endpoint: process.env.S3_ENDPOINT,
