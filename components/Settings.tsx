@@ -218,6 +218,13 @@ function SecuritySection({ me, toast }: { me: ReturnType<typeof useMe>; toast: P
 function StorageSection({ roms, onChanged, toast }: { roms: RomView[]; onChanged: () => void; toast: Push }) {
   const [run, setRun] = useState<string | null>(null);
   const missing = roms.filter((r) => !r.coverVer);
+  const [usage, setUsage] = useState<{ used: number; limit: number } | null>(null);
+  const me = useMe();
+  useEffect(() => { api<{ used: number; limit: number }>("/api/storage").then(setUsage).catch(() => {}); }, [roms.length]);
+  async function fixCors() {
+    try { await api("/api/storage", { method: "POST" }); sfx("saved"); toast({ title: "Upload permissions set", text: "The bucket now accepts uploads from this site" }, 3000); }
+    catch (e: any) { toast({ title: "Couldn't set permissions", text: e?.message ?? "Set the CORS rule in your storage dashboard instead" }, 5000); }
+  }
   async function fetchCovers() {
     let found = 0;
     const t = toast({ title: "Finding cover art…", text: `0 / ${missing.length}`, progress: 0, icon: "image" }, 0);
@@ -233,12 +240,19 @@ function StorageSection({ roms, onChanged, toast }: { roms: RomView[]; onChanged
   }
   return (<>
     <h2>Storage</h2>
+    {usage && (
+      <div className="row tall"><span><b>Bucket</b><small>All accounts together · uploads stop at the limit so the free tier is never exceeded</small>
+        <span className="xp-bar" style={{ marginTop: 8, display: "block", width: 280 }}><i style={{ width: `${Math.min(100, (usage.used / usage.limit) * 100)}%` }} /></span></span>
+        <span>{mb(usage.used)} / {mb(usage.limit)}</span></div>
+    )}
     <div className="row tall"><span><b>Games</b><small>Stored in your private space in the bucket</small></span><span>{roms.length} · {mb(roms.reduce((a, r) => a + r.size, 0))}</span></div>
     <div className="row tall"><span><b>Total play time</b></span><span>{playtime(roms.reduce((a, r) => a + (r.playSeconds ?? 0), 0))} hrs</span></div>
     <div className="row tall"><span><b>Cover art</b><small>{missing.length ? `${missing.length} game${missing.length > 1 ? "s" : ""} without a cover` : "Every game has a cover"} · libretro-thumbnails box art</small></span>
       <button data-nav className="btn" disabled={!missing.length || !!run} onClick={fetchCovers}><Icon name="wand" size={20} />{run ? "Searching…" : "Find missing covers"}</button></div>
     <div className="row tall"><span><b>Downloaded ROM cache</b><small>ROMs cached on this device so they only download once</small></span>
       <button data-nav className="btn" onClick={async () => { await caches.delete("linkcable-roms"); sfx("back"); toast({ title: "Cache cleared" }, 1500); }}>Clear cache</button></div>
+    {me?.owner && <div className="row tall"><span><b>Upload permissions</b><small>Writes the bucket's CORS rule for this site's address. Run once after setting up storage.</small></span>
+      <button data-nav className="btn" onClick={fixCors}>Set up</button></div>}
   </>);
 }
 

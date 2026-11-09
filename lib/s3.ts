@@ -1,4 +1,4 @@
-import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectsCommand, ListObjectsV2Command, HeadObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectsCommand, ListObjectsV2Command, HeadObjectCommand, PutBucketCorsCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 let _client: S3Client | null = null;
@@ -85,3 +85,29 @@ export async function deleteKeys(keys: string[]) {
   if (keys.length) await s3().send(new DeleteObjectsCommand({ Bucket: Bucket(), Delete: { Objects: keys.map((Key) => ({ Key })) } }));
 }
 export const validVer = (v: string) => /^[0-9]{13}-[a-z0-9]{4,12}$/.test(v);
+
+// ---------------------------------------------------------------- free-tier guard
+/** Hard ceiling for the whole bucket (all users). Uploads that would cross it are refused,
+ *  so a free storage tier (B2 / R2: 10 GB) is never exceeded. Default 9 GB leaves headroom for saves. */
+export const storageLimit = () => Math.round((Number(process.env.STORAGE_LIMIT_GB) || 9) * 1024 ** 3);
+let _usage: { bytes: number; at: number } | null = null;
+export async function bucketUsage(fresh = false) {
+  if (!fresh && _usage && Date.now() - _usage.at < 60_000) return _usage.bytes;
+  let bytes = 0, ContinuationToken: string | undefined;
+  do {
+    const r = await s3().send(new ListObjectsV2Command({ Bucket: Bucket(), ContinuationToken }));
+    for (const o of r.Contents ?? []) bytes += o.Size ?? 0;
+    ContinuationToken = r.IsTruncated ? r.NextContinuationToken : undefined;
+  } while (ContinuationToken);
+  _usage = { bytes, at: Date.now() };
+  return bytes;
+}
+export const noteUpload = (n: number) => { if (_usage) _usage.bytes += n; };
+
+/** Lets the browser PUT/GET straight to the bucket from this site's origin. */
+export async function setCors(origins: string[]) {
+  await s3().send(new PutBucketCorsCommand({ Bucket: Bucket(), CORSConfiguration: { CORSRules: [{
+    AllowedOrigins: origins, AllowedMethods: ["GET", "PUT", "HEAD"], AllowedHeaders: ["*"],
+    ExposeHeaders: ["content-length", "etag"], MaxAgeSeconds: 3600,
+  }] } }));
+}

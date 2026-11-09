@@ -1,4 +1,4 @@
-import { keys, getJson, signPut } from "../../../lib/s3";
+import { keys, getJson, signPut, bucketUsage, storageLimit, noteUpload } from "../../../lib/s3";
 import { RomEntry, systemFromFilename } from "../../../lib/games";
 import { viewer } from "../../../lib/views";
 import { requireUser } from "../../../lib/users";
@@ -22,6 +22,9 @@ export const POST = guard(async (req: Request) => {
   if (typeof filename !== "string" || typeof size !== "number") return bad("filename and size required");
   if (!systemFromFilename(filename)) return bad("unsupported file — use .gb .gbc .gba or .nds");
   if (size <= 0 || size > MAX) return bad("file too large");
+  const used = await bucketUsage(), limit = storageLimit();
+  if (used + size > limit) return bad(`Storage is full: ${(used / 1024 ** 3).toFixed(1)} of ${(limit / 1024 ** 3).toFixed(0)} GB used. Delete a game to make room.`, 507);
+  noteUpload(size);
   const id = crypto.randomUUID().slice(0, 13).replace(/[^a-z0-9-]/g, "");
   return json({ id, uploadUrl: await signPut(K.rom(id)) });
 });

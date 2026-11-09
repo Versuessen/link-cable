@@ -19,21 +19,16 @@ ROMs and saves never pass through Vercel. The browser uploads and downloads them
 
 ## Setup (≈10 min)
 
-### 1. Cloudflare R2 bucket
-1. Go to Cloudflare dashboard → **R2** → *Create bucket*, for example `poke-pc`. Leave public access **off**.
-2. In the bucket, open **Settings → CORS policy** and paste the following, with your own domains:
-   ```json
-   [{
-     "AllowedOrigins": ["https://your-app.vercel.app", "http://localhost:3000"],
-     "AllowedMethods": ["GET", "PUT", "HEAD"],
-     "AllowedHeaders": ["content-type"],
-     "ExposeHeaders": ["content-length", "etag"],
-     "MaxAgeSeconds": 3600
-   }]
-   ```
-3. Go to **R2 → Manage API tokens → Create token**, choose *Object Read & Write* scoped to that bucket, and copy the Access Key ID and Secret. The endpoint is `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`.
+### 1. Storage bucket: Backblaze B2 (free, no card)
+1. Sign up at backblaze.com (B2 Cloud Storage). The first 10 GB are free and no credit card is needed.
+2. Go to **Buckets → Create a Bucket**, name it (e.g. `link-cable`), and keep it **Private**. Note the **Endpoint** shown on the bucket, e.g. `s3.eu-central-003.backblazeb2.com`. The region is the middle part (`eu-central-003`).
+3. Go to **Application Keys → Add a New Application Key**, allow access to that bucket only, with *Read and Write*. Copy the **keyID** and **applicationKey** (shown once).
+4. Optional but recommended: open **Caps & Alerts** and set every cap to $0, so B2 refuses work instead of ever billing.
+5. After deploying, sign in as the owner and open **Settings → Storage → Upload permissions → Set up**. This writes the bucket's CORS rule for your site.
 
-(Any S3-compatible store works: AWS S3, Backblaze B2, MinIO. Set `S3_FORCE_PATH_STYLE=1` for MinIO.)
+The app also enforces its own ceiling: uploads that would push the bucket past `STORAGE_LIMIT_GB` (default 9) are refused, and Settings → Storage shows the bucket meter.
+
+Any other S3-compatible store also works (Cloudflare R2, AWS S3, MinIO). Set `S3_FORCE_PATH_STYLE=1` for MinIO.
 
 ### 2. Environment variables
 Copy `.env.example` to `.env.local` for local dev, and add the same variables in **Vercel → Project → Settings → Environment Variables**:
