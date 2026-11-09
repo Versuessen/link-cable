@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+<title>player</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0e141b; overflow: hidden; }
+  #game { width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<div id="game"></div>
+<script>
+/*
+ * PokéPC player host.
+ * Runs EmulatorJS in isolation (iframe) so closing/leaving the play page fully tears the emulator down.
+ * Cloud is the source of truth: on boot it pulls the newest save, while playing it pushes
+ * autosaves, and whenever the tab is hidden it pushes immediately + pauses.
+ * Parent page talks to us via window.pokeSync (same origin) and listens to postMessage events.
+ */
+(() => {
+  const EJS_CDN = "https://cdn.emulatorjs.org/stable/data/";
+  const AUTOSAVE_MS = 45_000;
+  const CORES = { gb: "gb", gbc: "gb", gba: "gba", nds: "nds" };
+
+  const id = new URLSearchParams(location.search).get("id");
+  const emit = (type, data = {}) => parent.postMessage({ source: "pokepc", type, ...data }, location.origin);
+
+  // ---- device identity (for cross-device conflict detection) ----
+  let deviceId = localStorage.getItem("pokepc_device");
+  if (!deviceId) { deviceId = crypto.randomUUID(); localStorage.setItem("pokepc_device", deviceId); }
+  const ua = navigator.userAgent;
+  const device = `${/Firefox/.test(ua) ? "Firefox" : /Edg/.test(ua) ? "Edge" : /Chrome/.test(ua) ? "Chrome" : /Safari/.test(ua) ? "Safari" : "Browser"} · ${
+    /iPhone|iPad/.test(ua) ? "iOS" : /Android/.test(ua) ? "Android" : /Mac/.test(ua) ? "macOS" : /Windows/.test(ua) ? "Windows" : /Linux/.test(ua) ? "Linux" : "?"}`;
+
+  // ---- sync state ----
+  const S = {
+    rom: null, running: false, busy: null, baseVer: undefined, lastSyncAt: 0,
+    lastHash: { state: "", sram: "" }, blocked: false, playedSince: Date.now(), pausedByUs: false,
+  };
+  const gm = () => window.EJS_emulator?.gameManager;
+
+  // ---- helpers ----
+  async function api(path, opts = {}) {
+    const r = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", ...(opts.headers || {}) } });
+    const body = await r.json().catch(() => ({}));
+    if (r.status === 401) { emit("auth"); throw new Error("logged out"); }
+    return { ok: r.ok, status: r.status, body };
+  }
+  async function hash(u8) {
+    if (!u8) return "";
+    const d = await crypto.subtle.digest("SHA-1", u8);
+    return Array.from(new Uint8Array(d), (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  const gzip = async (u8) => new Uint8Array(await new Response(new Blob([u8]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer());
+  const gunzip = async (buf) => new Uint8Array(await new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
+  async function put(url, u8) {
+    const r = await fetch(url, { method: "PUT", body: u8, headers: { "Content-Type": "application/octet-stream" }, keepalive: u8.byteLength < 60_000 });
+    if (!r.ok) throw new Error("upload failed (" + r.status + ") — check bucket CORS");
+  }
+
+  async function fetchWithProgress(url, label) {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(label + " download failed (" + r.status + ")");
+    const total = Number(r.headers.get("content-length")) || 0;
+    if (!r.body || !total) return new Uint8Array(await r.arrayBuffer());
+    const reader = r.body.getReader(); const chunks = []; let got = 0;
+    for (;;) {
+      const { done, value } = await reader.read(); if (done) break;
+      chunks.push(value); got += value.length; emit("progress", { label, pct: got / total });
+    }
+    const out = new Uint8Array(got); let o = 0; for (const c of chunks) { out.set(c, o); o += c.length; }
+    return out;
+  }
+
+  // ROMs are cached per-device (Cache Storage) so a 100MB DS ROM is only downloaded once.
+  async function loadRom(rom, url) {
+    const key = `/__rom-cache/${rom.id}`;
+    try {
+      const cache = await caches.open("linkcable-roms");
+      const hit = await cache.match(key);
+      if (hit) return new Uint8Array(await hit.arrayBuffer());
+      const data = await fetchWithProgress(url, "ROM");
+      await cache.put(key, new Response(data)).catch(() => {});
+      return data;
+    } catch (e) {
+      if (String(e.message).includes("download failed")) throw e;
+      return fetchWithProgress(url, "ROM"); // Cache API unavailable (private mode etc.)
+    }
+  }
+
+  async function downloadSave(save) {
+    if (!save) return { state: null, sram: null };
+    // If the cloud save can't be fetched we stop here instead of booting a fresh game,
+    // which would otherwise autosave over your real progress.
+    const get = async (url) => {
+      const r = await fetch(url).catch(() => null);
+      if (!r || !r.ok) throw new Error(`Couldn't download your cloud save (${r ? r.status : "network error"}). Your progress is safe in the cloud. Try again in a moment.`);
+      return r.arrayBuffer();
+    };
+    const [state, sram] = await Promise.all([
+      save.stateUrl ? get(save.stateUrl).then((b) => save.stateGz ? gunzip(b) : new Uint8Array(b)) : null,
+      save.sramUrl ? get(save.sramUrl).then((b) => new Uint8Array(b)) : null,
+    ]);
+    return { state, sram };
+  }
+
+  function applySave({ state, sram }) {
+    const g = gm(); if (!g) return;
+    if (sram) {
+      try {
+        const p = g.getSaveFilePath();
+        const dir = p.slice(0, p.lastIndexOf("/"));
+        try { g.FS.mkdirTree?.(dir); } catch {}
+        g.FS.writeFile(p, sram);
+        g.loadSaveFiles();
+      } catch (e) { console.warn("sram apply failed", e); }
+    }
+    if (state) g.loadState(state);
+    else if (sram) g.restart(); // cartridge save only: reboot so the game reads it
+  }
+
+  // native-resolution frame (e.g. 240x160 for GBA) → library hero art + save timeline thumbnails
+  async function screenshot() {
+    try {
+      const r = await Promise.race([
+        window.EJS_emulator.takeScreenshot("retroarch", "png", 1),
+        new Promise((res) => setTimeout(() => res(null), 1500)),
+      ]);
+      return r?.screenshot?.byteLength ? r.screenshot : null;
+    } catch { return null; }
+  }
+
+  // ---- saving ----
+  async function save(reason = "auto", { force = false } = {}) {
+    if (!S.running || (S.blocked && !force)) return { skipped: true };
+    if (S.busy) { await S.busy; if (reason === "auto") return { skipped: true }; }
+    const run = (async () => {
+      const g = gm();
+      let state = null, sram = null;
+      try { state = g.supportsStates() ? g.getState() : null; } catch (e) { console.warn(e); }
+      try { sram = g.getSaveFile(); } catch (e) { console.warn(e); }
+      if (!state && !sram) return { skipped: true };
+      const [hs, hr] = await Promise.all([hash(state), hash(sram)]);
+      if (!force && hs === S.lastHash.state && hr === S.lastHash.sram) {
+        S.lastSyncAt = Date.now(); emit("status", status()); return { skipped: true, unchanged: true };
+      }
+      emit("saving", { reason });
+      const [stateGz, shot] = await Promise.all([state ? gzip(state) : null, screenshot()]);
+      const { body: urls } = await api(`/api/saves/${id}`, { method: "POST", body: JSON.stringify({ hasState: !!stateGz, hasSram: !!sram, hasShot: !!shot }) });
+      await Promise.all([stateGz && put(urls.stateUrl, stateGz), sram && put(urls.sramUrl, sram), shot && put(urls.shotUrl, shot).catch(() => {})]);
+      const now = Date.now();
+      const res = await api(`/api/saves/${id}`, { method: "PUT", keepalive: true, body: JSON.stringify({
+        ver: urls.ver, baseVer: S.baseVer ?? null, force, reason, device, deviceId,
+        hasState: !!stateGz, hasSram: !!sram, stateGz: true, hasShot: !!shot, localHour: new Date().getHours(), playedDelta: Math.round((now - S.playedSince) / 1000),
+      }) });
+      if (res.status === 409 && res.body.conflict) {
+        S.blocked = true;
+        emit("conflict", { current: res.body.current });
+        return { conflict: true };
+      }
+      if (!res.ok) throw new Error(res.body.error || "save failed");
+      S.playedSince = now; S.baseVer = urls.ver; S.lastSyncAt = now; S.blocked = false;
+      S.lastHash = { state: hs, sram: hr };
+      emit("saved", { reason, at: now, meta: res.body.meta });
+      return { ok: true };
+    })();
+    S.busy = run.catch((e) => { emit("error", { message: e.message }); return { error: e.message }; }).finally(() => { S.busy = null; });
+    return S.busy;
+  }
+
+  async function pullLatest(ver) {
+    const { body } = await api(`/api/saves/${id}` + (ver ? `?ver=${encodeURIComponent(ver)}` : ""));
+    if (!body.save) return false;
+    emit("loading-save");
+    applySave(await downloadSave(body.save));
+    S.baseVer = body.meta.current?.ver; S.blocked = false; S.lastHash = { state: "", sram: "" };
+    emit("loaded-save", { save: body.save, meta: body.meta });
+    return true;
+  }
+
+  function status() {
+    const paused = !!window.EJS_emulator?.paused;
+    return {
+      running: S.running, saving: !!S.busy, paused, lastSyncAt: S.lastSyncAt, blocked: S.blocked,
+      // "dirty" = there may be progress the cloud doesn't have
+      dirty: S.running && (!!S.busy || (!paused && Date.now() - S.lastSyncAt > 4000)),
+    };
+  }
+
+  // ---- lifecycle: autosave + leave detection ----
+  setInterval(() => { if (document.visibilityState === "visible" && !window.EJS_emulator?.paused) save("auto"); }, AUTOSAVE_MS);
+  setInterval(() => emit("status", status()), 1000);
+
+  document.addEventListener("visibilitychange", async () => {
+    if (!S.running) return;
+    if (document.visibilityState === "hidden") {
+      // fires on tab switch, app switch on mobile, minimise, and right before a tab closes
+      if (!window.EJS_emulator.paused) { window.EJS_emulator.pause(); S.pausedByUs = true; }
+      save("leave");
+    } else {
+      // came back — did another device play in the meantime?
+      try {
+        const { body } = await api(`/api/saves/${id}`);
+        const cur = body.meta.current;
+        if (cur && cur.ver !== S.baseVer && cur.deviceId !== deviceId) { S.blocked = true; emit("conflict", { current: cur }); return; }
+      } catch {}
+      if (S.pausedByUs) { window.EJS_emulator.play(); S.pausedByUs = false; }
+    }
+  });
+
+  // Esc / F1 inside the game opens the PC overlay menu in the parent page
+  addEventListener("keydown", (e) => { if (e.key === "Escape" || e.key === "F1") { e.preventDefault(); emit("menu"); } }, true);
+
+  // ---- public API for the parent page ----
+  window.pokeSync = {
+    save: (reason = "manual") => save(reason),
+    forceSave: () => save("manual", { force: true }),
+    pullLatest, status,
+    pause: () => window.EJS_emulator?.pause(), play: () => window.EJS_emulator?.play(),
+    isRunning: () => S.running,
+  };
+
+  // ---- boot ----
+  (async () => {
+    try {
+      if (!id) throw new Error("no game id");
+      const { ok, body } = await api(`/api/roms/${id}`);
+      if (!ok) throw new Error(body.error || "game not found");
+      S.rom = body.rom;
+      emit("boot", { rom: body.rom });
+      const [romData, saveRes] = await Promise.all([loadRom(body.rom, body.url), api(`/api/saves/${id}`)]);
+      const remote = await downloadSave(saveRes.body.save);
+      S.baseVer = saveRes.body.meta.current?.ver ?? null;
+
+      Object.assign(window, {
+        EJS_player: "#game",
+        EJS_core: CORES[body.rom.system],
+        EJS_gameName: id,
+        EJS_gameUrl: new File([romData], body.rom.filename),
+        EJS_pathtodata: EJS_CDN,
+        EJS_startOnLoaded: true,
+        EJS_color: "#00b4f0",
+        EJS_backgroundColor: "#0e141b",
+        EJS_disableAutoUnload: true,
+        EJS_defaultOptions: { "save-state-location": "browser" },
+        // in-emulator menu buttons go to the cloud instead of downloading files
+        EJS_onSaveState: () => save("ingame", { force: true }),
+        EJS_onLoadState: () => pullLatest(),
+        EJS_onGameStart: () => {
+          applySave(remote);
+          S.running = true; S.lastSyncAt = Date.now(); S.playedSince = Date.now();
+          emit("started", { hadSave: !!(remote.state || remote.sram), meta: saveRes.body.meta });
+        },
+      });
+      const s = document.createElement("script");
+      s.src = EJS_CDN + "loader.js";
+      s.onerror = () => emit("error", { message: "Couldn't load the emulator from the CDN" });
+      document.body.appendChild(s);
+    } catch (e) {
+      emit("error", { message: e.message, fatal: true });
+    }
+  })();
+})();
+</script>
+</body>
+</html>
