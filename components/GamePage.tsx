@@ -14,7 +14,7 @@ import { sfx } from "./sfx";
 type Hist = SaveVersion & { shotUrl?: string | null };
 type M = Omit<SaveMeta, "history"> & { history: Hist[] };
 
-function AchievementList({ set, unlocked }: { set: Achievement[]; unlocked: Record<string, number> }) {
+function AchievementList({ set, unlocked, onReset }: { set: Achievement[]; unlocked: Record<string, number>; onReset: () => void }) {
   const got = set.filter((a) => unlocked[a.id]), pts = got.reduce((n, a) => n + a.points, 0), all = totalPoints(set);
   const cats = (Object.keys(CATEGORY_LABEL) as (keyof typeof CATEGORY_LABEL)[]).map((c) => ({ c, items: set.filter((a) => a.cat === c) })).filter((x) => x.items.length);
   return (
@@ -25,6 +25,7 @@ function AchievementList({ set, unlocked }: { set: Achievement[]; unlocked: Reco
           <strong>{got.length === set.length ? "Mastered" : `${got.length} of ${set.length} unlocked`}</strong>
           <span>{pts.toLocaleString()} / {all.toLocaleString()} points · unlocks appear while you play{got.length === 0 ? ", after your first in-game save" : ""}</span>
         </span>
+        {got.length > 0 && <button data-nav className="btn small ach-reset" onClick={onReset}><Icon name="reset" size={18} />Reset</button>}
       </div>
       {cats.map(({ c, items }) => (
         <section key={c}>
@@ -57,7 +58,7 @@ export default function GamePage({ rom, onClose, onPlay, onChanged, toast }: {
   const set = achievementsFor(rom.header?.code);
   const [unlocked, setUnlocked] = useState<Record<string, number> | null>(null);
   const tabsOrder = (set ? ["saves", "ach", "info"] : ["saves", "info"]) as ("saves" | "ach" | "info")[];
-  const [modal, setModal] = useState<null | "rename" | "delete" | "cover" | { restore: Hist }>(null);
+  const [modal, setModal] = useState<null | "rename" | "delete" | "cover" | "reset-ach" | { restore: Hist }>(null);
   const coverInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -132,7 +133,7 @@ export default function GamePage({ rom, onClose, onPlay, onChanged, toast }: {
             ))}
           </div>
         ))}
-        {tab === "ach" && set && <AchievementList set={set} unlocked={unlocked ?? {}} />}
+        {tab === "ach" && set && <AchievementList set={set} unlocked={unlocked ?? {}} onReset={() => setModal("reset-ach")} />}
         {tab === "info" && (
           <div className="gp-info">
             <div className="gp-cover"><Art rom={rom} prefer="cover" /></div>
@@ -162,6 +163,12 @@ export default function GamePage({ rom, onClose, onPlay, onChanged, toast }: {
       {modal === "rename" && (
         <PromptModal title="Rename game" label="Display name" initial={rom.title} onClose={() => setModal(null)}
           onSubmit={async (v) => { setModal(null); await api(`/api/roms/${rom.id}`, { method: "POST", body: JSON.stringify({ action: "rename", title: v }) }); onChanged(); }} />
+      )}
+      {modal === "reset-ach" && (
+        <Modal title="Reset achievements?" onClose={() => setModal(null)} actions={[
+          { label: "Reset", danger: true, onClick: async () => { setModal(null); const r = await api<{ unlocked: Record<string, number> }>(`/api/achievements/${rom.id}`, { method: "DELETE" }); setUnlocked(r.unlocked); sfx("back"); } },
+          { label: "Cancel", primary: true, onClick: () => setModal(null) },
+        ]}><p>All of this game's achievements are cleared. Anything your save already qualifies for unlocks again the next time you play.</p></Modal>
       )}
       {modal === "delete" && (
         <Modal title={`Delete ${rom.title}?`} onClose={() => setModal(null)} actions={[

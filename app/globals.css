@@ -734,3 +734,4 @@ input[type=range]:focus { outline: 3px solid var(--focus); outline-offset: 3px; 
 .ach-when { color: var(--text-3) !important; }
 .ach-pts { font-weight: 800; font-size: 15px; color: var(--text-3); min-width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
 .ach-card.on .ach-pts { color: #c48a00; }
+.ach-reset { margin-left: auto; }

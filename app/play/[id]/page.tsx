@@ -29,21 +29,33 @@ export default function Play({ params }: { params: Promise<{ id: string }> }) {
   const toasts = useToasts();
   usePresence(rom?.title);
   // ---- in-game achievements: the emulator page reports the game's state, we decide what just unlocked
-  const ach = useRef<{ have: Record<string, number> | null; prev: GameState | null; busy: boolean }>({ have: null, prev: null, busy: false });
+  const ach = useRef<{ have: Record<string, number> | null; prev: GameState | null; busy: boolean; migrate: boolean }>({ have: null, prev: null, busy: false, migrate: false });
   const [achCount, setAchCount] = useState(0);
   const [reader, setReader] = useState<{ note: string; tracking: boolean; supported: boolean } | null>(null);
   const set = achievementsFor(rom?.header?.code);
   useEffect(() => {
     if (!set) return;
-    fetch(`/api/achievements/${id}`).then((r) => r.json()).then((d) => { ach.current.have = d.unlocked ?? {}; setAchCount(Object.keys(d.unlocked ?? {}).length); }).catch(() => { ach.current.have = {}; });
+    fetch(`/api/achievements/${id}`).then((r) => r.json()).then((d) => { ach.current.have = d.unlocked ?? {}; ach.current.migrate = d.v !== 2 && Object.keys(d.unlocked ?? {}).length > 0; setAchCount(Object.keys(d.unlocked ?? {}).length); }).catch(() => { ach.current.have = {}; });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, !!set]);
   const onState = (st: GameState) => {
     const a = ach.current;
     if (!set || !a.have) return;
+    // one-time cleanup: unlocks recorded by the old reader that this verified reading doesn't back up
+    let revoke: string[] = [];
+    if (a.migrate) {
+      revoke = Object.keys(a.have).filter((k) => { const x = set.find((y) => y.id === k); if (!x || x.cat === "feat") return false; try { return !x.test(st, null); } catch { return false; } });
+      for (const k of revoke) delete a.have[k];
+    }
     const fresh = newlyUnlocked(set, st, a.prev, a.have);
     a.prev = st;
-    if (!fresh.length) return;
+    if (a.migrate) {
+      a.migrate = false;
+      setAchCount(Object.keys(a.have).length + fresh.length);
+      if (revoke.length) toasts.push({ title: `Corrected ${revoke.length} achievement${revoke.length > 1 ? "s" : ""}`, text: "Removed unlocks an earlier version misread", icon: "info" }, 6000);
+      fetch(`/api/achievements/${id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: fresh.map((x) => x.id), revoke, migrate: 2 }) }).catch(() => {});
+      if (!fresh.length) return;
+    } else if (!fresh.length) return;
     const now = Date.now();
     for (const x of fresh) a.have[x.id] = now;
     setAchCount(Object.keys(a.have).length);
