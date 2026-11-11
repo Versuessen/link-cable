@@ -123,8 +123,17 @@ The mouse and touch work everywhere too; hovering moves the console focus. In-ga
 - DS runs fine on desktop and is heavier on phones.
 
 ## In-game achievements
-While a supported game runs, a small reader inside the emulator page (`public/ach-reader.js`) reads the console's work RAM from a save state once a second (the same IWRAM/EWRAM map RetroAchievements' MIT-licensed rcheevos uses for the GBA), follows the game's own save-data pointers (Emerald and FireRed/LeafGreen move that data around on every map change), checks each reading for consistency, and reports the trainer's progress (badges, Pokédex, money, play time, party). The site checks that against the game's achievement list (`lib/achievements.ts`), shows a pop-up the moment something unlocks, and stores it per account and per game. The game page has an Achievements tab.
+Every main-series game from Red to White 2 has its own achievement list (`lib/achievements.ts`): roughly 65–100 per game. They cover badges, the Pokédex, legendaries, team feats, money, play time, and a few secret ones. Pop-ups appear while you play, the game page has an Achievements tab, and points count towards your account level (5 XP per point).
 
-- Supported now: Ruby, Sapphire, Emerald, FireRed, LeafGreen (all languages).
-- Tracking starts after the first in-game save, because the reader finds the game's data by looking for your trainer name and ID from the cartridge save.
-- Achievement points also count towards your account level (5 XP per point).
+How it reads the game (`public/ach-reader.js`): once a second it takes a save state and reads the console's RAM out of it. This is the same memory map RetroAchievements' MIT-licensed rcheevos uses: GBA IWRAM/EWRAM, Game Boy WRAM, DS main RAM. It then finds the game's data by structure rather than by fixed addresses, so no in-game save is needed:
+- **Gen 1/2:** by the shape of the party list.
+- **Gen 3:** by following the game's own save-data pointers (Emerald and FireRed/LeafGreen move that data on every map change).
+- **Gen 4/5:** by the Pokédex block's magic number.
+
+Every reading is checked for consistency and has to repeat before anything unlocks.
+
+| Games | Status |
+|---|---|
+| FireRed / LeafGreen | confirmed on a real cartridge |
+| Red / Blue / Yellow, Gold / Silver / Crystal, Ruby / Sapphire / Emerald, Diamond / Pearl / Platinum, HeartGold / SoulSilver, Black / White / Black 2 / White 2 | beta: tested with synthetic test cartridges only |
+| Japanese Gen 1/2 | not supported (different memory layout) |

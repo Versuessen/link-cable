@@ -735,3 +735,4 @@ input[type=range]:focus { outline: 3px solid var(--focus); outline-offset: 3px; 
 .ach-pts { font-weight: 800; font-size: 15px; color: var(--text-3); min-width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
 .ach-card.on .ach-pts { color: #c48a00; }
 .ach-reset { margin-left: auto; }
+.ach-beta { display: block; margin-top: 4px; font-size: 14px !important; color: var(--text-2); } .ach-beta b { display: inline-block; margin-right: 6px; padding: 1px 8px; border-radius: 99px; background: #f59e0b; color: #fff; font-size: 12px; }

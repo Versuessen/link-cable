@@ -32,15 +32,19 @@ export default function Play({ params }: { params: Promise<{ id: string }> }) {
   const ach = useRef<{ have: Record<string, number> | null; prev: GameState | null; busy: boolean; migrate: boolean }>({ have: null, prev: null, busy: false, migrate: false });
   const [achCount, setAchCount] = useState(0);
   const [reader, setReader] = useState<{ note: string; tracking: boolean; supported: boolean } | null>(null);
-  const set = achievementsFor(rom?.header?.code);
+  const set = rom ? achievementsFor(rom) : null;
+  const sessionStart = useRef(Date.now());
   useEffect(() => {
     if (!set) return;
     fetch(`/api/achievements/${id}`).then((r) => r.json()).then((d) => { ach.current.have = d.unlocked ?? {}; ach.current.migrate = d.v !== 2 && Object.keys(d.unlocked ?? {}).length > 0; setAchCount(Object.keys(d.unlocked ?? {}).length); }).catch(() => { ach.current.have = {}; });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, !!set]);
-  const onState = (st: GameState) => {
+  const onState = (input: GameState) => {
+    let st = input;
     const a = ach.current;
     if (!set || !a.have) return;
+    // Gen 1/2 have no readable clock: use the time played here (all sessions so far + this one)
+    if (st.playSeconds == null) st = { ...st, playSeconds: (rom?.playSeconds ?? 0) + (Date.now() - sessionStart.current) / 1000 };
     // one-time cleanup: unlocks recorded by the old reader that this verified reading doesn't back up
     let revoke: string[] = [];
     if (a.migrate) {

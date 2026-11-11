@@ -3,6 +3,7 @@ import { RomEntry, cleanTitle, systemFromFilename } from "../../../../lib/games"
 import { viewer } from "../../../../lib/views";
 import { requireUser } from "../../../../lib/users";
 import { confident, findCovers, readHeader, thumbUrl } from "../../../../lib/covers";
+import { gameFor } from "../../../../lib/achievements";
 import { bad, guard, json } from "../../../../lib/http";
 
 export const dynamic = "force-dynamic";
@@ -15,7 +16,9 @@ export const GET = guard(async (_req: Request, { params }: Ctx) => {
   if (!validId(id)) return bad("bad id");
   const rom = ((await getJson<RomEntry[]>(K.index)) ?? []).find((r) => r.id === id);
   if (!rom) return bad("not found", 404);
-  return json({ rom: await viewer(K)(rom), url: await signGet(K.rom(id)) });
+  // older library entries may lack a header (or a Game Boy game code): read it now so achievements can identify the game
+  if (!rom.header?.title) { const h = await header(K, rom); if (h) rom.header = h; }
+  return json({ rom: await viewer(K)(rom), url: await signGet(K.rom(id)), game: gameFor(rom) });
 });
 
 async function header(K: Keys, rom: RomEntry) {

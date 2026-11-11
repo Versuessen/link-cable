@@ -23,7 +23,7 @@ export const POST = guard(async (req: Request, { params }: { params: Promise<{ i
   if (!validId(id)) return bad("bad id");
   const me = await requireUser(), K = keys(me.prefix);
   const rom = ((await getJson<RomEntry[]>(K.index)) ?? []).find((r) => r.id === id);
-  const set = achievementsFor(rom?.header?.code);
+  const set = rom ? achievementsFor(rom) : null;
   if (!rom || !set) return bad("no achievements for this game", 404);
   const { ids, revoke, migrate } = await req.json().catch(() => ({}));
   if (!Array.isArray(ids)) return bad("ids required");

@@ -1,5 +1,5 @@
 "use client";
-import { achievementsFor, totalPoints, CATEGORY_LABEL, type Achievement } from "../lib/achievements";
+import { achievementsFor, gameFor, totalPoints, CATEGORY_LABEL, type Achievement } from "../lib/achievements";
 import { useEffect, useRef, useState } from "react";
 import type { RomView, SaveMeta, SaveVersion } from "../lib/games";
 import { SYSTEMS } from "../lib/games";
@@ -14,7 +14,7 @@ import { sfx } from "./sfx";
 type Hist = SaveVersion & { shotUrl?: string | null };
 type M = Omit<SaveMeta, "history"> & { history: Hist[] };
 
-function AchievementList({ set, unlocked, onReset }: { set: Achievement[]; unlocked: Record<string, number>; onReset: () => void }) {
+function AchievementList({ set, unlocked, onReset, beta }: { set: Achievement[]; unlocked: Record<string, number>; onReset: () => void; beta: boolean }) {
   const got = set.filter((a) => unlocked[a.id]), pts = got.reduce((n, a) => n + a.points, 0), all = totalPoints(set);
   const cats = (Object.keys(CATEGORY_LABEL) as (keyof typeof CATEGORY_LABEL)[]).map((c) => ({ c, items: set.filter((a) => a.cat === c) })).filter((x) => x.items.length);
   return (
@@ -23,7 +23,8 @@ function AchievementList({ set, unlocked, onReset }: { set: Achievement[]; unloc
         <span className="ach-ring" style={{ ["--p" as any]: got.length / set.length }}><b>{Math.round((got.length / set.length) * 100)}%</b></span>
         <span className="ach-sum-text">
           <strong>{got.length === set.length ? "Mastered" : `${got.length} of ${set.length} unlocked`}</strong>
-          <span>{pts.toLocaleString()} / {all.toLocaleString()} points · unlocks appear while you play{got.length === 0 ? ", after your first in-game save" : ""}</span>
+          <span>{pts.toLocaleString()} / {all.toLocaleString()} points · unlocks appear while you play, once you have your first Pokémon</span>
+          {beta && <span className="ach-beta"><b>Beta</b> Reading this game hasn&apos;t been confirmed on a real cartridge yet. If something unlocks that shouldn&apos;t, use Reset and let me know.</span>}
         </span>
         {got.length > 0 && <button data-nav className="btn small ach-reset" onClick={onReset}><Icon name="reset" size={18} />Reset</button>}
       </div>
@@ -55,7 +56,8 @@ export default function GamePage({ rom, onClose, onPlay, onChanged, toast }: {
 }) {
   const [meta, setMeta] = useState<M | null>(null);
   const [tab, setTab] = useState<"saves" | "ach" | "info">("saves");
-  const set = achievementsFor(rom.header?.code);
+  const set = achievementsFor(rom);
+  const game = gameFor(rom);
   const [unlocked, setUnlocked] = useState<Record<string, number> | null>(null);
   const tabsOrder = (set ? ["saves", "ach", "info"] : ["saves", "info"]) as ("saves" | "ach" | "info")[];
   const [modal, setModal] = useState<null | "rename" | "delete" | "cover" | "reset-ach" | { restore: Hist }>(null);
@@ -133,7 +135,7 @@ export default function GamePage({ rom, onClose, onPlay, onChanged, toast }: {
             ))}
           </div>
         ))}
-        {tab === "ach" && set && <AchievementList set={set} unlocked={unlocked ?? {}} onReset={() => setModal("reset-ach")} />}
+        {tab === "ach" && set && <AchievementList set={set} unlocked={unlocked ?? {}} beta={!game?.verified} onReset={() => setModal("reset-ach")} />}
         {tab === "info" && (
           <div className="gp-info">
             <div className="gp-cover"><Art rom={rom} prefer="cover" /></div>
