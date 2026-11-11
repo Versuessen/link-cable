@@ -282,35 +282,67 @@
     if (n < 1 || n > 6) return false;
     return !!dsMon(h, b + L.party, L.size);
   }
+  /** The party as the game uses it while you play: struct { u32 capacity = 6; u32 count; mon[6] }, owned by the player.
+   * The copy inside the save data is only refreshed when you save (Black/White especially), so it's skipped. */
+  function dsPartyOk(h, a, L, tid, sid) {
+    if (a < 0 || a + 8 + 6 * L.size > h.length || u32(h, a) !== 6) return null;
+    const n = u32(h, a + 4); if (n < 1 || n > 6) return null;
+    const out = []; let mine = false;
+    for (let i = 0; i < n; i++) { const x = dsMon(h, a + 8 + i * L.size, L.size); if (!x) return null; out.push(x); if (x.id.endsWith("." + tid.toString(16) + sid.toString(16))) mine = true; }
+    return mine ? out : null;
+  }
+  function dsLiveParty(h, b, L, R) {
+    const tid = u16(h, b + L.name + 0x10), sid = u16(h, b + L.name + 0x12), saved = b + L.count - 4;
+    if (R.lp >= 0 && R.lp !== saved) { const p = dsPartyOk(h, R.lp, L, tid, sid); if (p) return p; }
+    R.lp = -1;
+    if (R.lpScan && Date.now() - R.lpScan < 5000) return null; // full scans at most every 5 s
+    R.lpScan = Date.now();
+    // skip the party inside every copy of the save data (the game keeps more than one)
+    const copies = new Set(findAll(h, [0xFE, 0xCA, 0xEF, 0xBE], 0, h.length, 4).map((o) => o - L.dex + L.count - 4));
+    for (const a of findAll(h, [6, 0, 0, 0], 0, h.length - 8, 4)) {
+      if (a === saved || copies.has(a)) continue;
+      if (dsPartyOk(h, a, L, tid, sid)) { R.lp = a; return dsPartyOk(h, a, L, tid, sid); }
+    }
+    return null;
+  }
   function dsRead(m, R) {
     const L = DS[R.ds], h = m.main;
     if (R.base < 0) {
-      // every copy of the Pokédex magic is a candidate; the live one is the copy whose play clock is running
+      // every copy of the Pokédex magic is a candidate; prefer the copy whose play clock is running.
+      // Black/White's clock in the save data only moves when you save, so after a few readings take what's there.
       const now = findAll(h, [0xFE, 0xCA, 0xEF, 0xBE], 0, h.length, 4).map((o) => o - L.dex).filter((b) => dsCheck(h, b, L))
         .map((b) => ({ b, t: `${u16(h, b + L.time)}:${h[b + L.time + 2]}:${h[b + L.time + 3]}` }));
-      if (R.cands) { const live = now.find((x) => R.cands.some((c) => c.b === x.b && c.t !== x.t)); if (live) R.base = live.b; }
+      if (R.cands) {
+        const live = now.find((x) => R.cands.some((c) => c.b === x.b && c.t !== x.t));
+        if (live) { R.base = live.b; R.dsTick = true; }
+        else if (++R.tries >= 3 && now.length) { R.base = now[now.length - 1].b; R.dsTick = false; }
+      }
       R.cands = now;
       if (R.base < 0) return { wait: now.length ? "checking" : "looking for your trainer (pick a starter first)" };
     }
     const b = R.base;
-    if (!dsCheck(h, b, L)) { R.base = -1; R.cands = null; return { wait: "title screen or loading" }; }
+    if (!dsCheck(h, b, L)) { R.base = -1; R.cands = null; R.tries = 0; return { wait: "title screen or loading" }; }
     const owned = bits(h, b + L.dex + L.caught, L.dexMax);
     const seenSet = new Set();
     for (let k = 0; k < L.seenN; k++) for (const n of bits(h, b + L.dex + L.seen + k * L.seenLen, L.dexMax)) seenSet.add(n);
     if (!subset(owned, [...seenSet])) return { bad: "owned/seen" };
-    const n = h[b + L.count], party = [];
-    for (let i = 0; i < n; i++) { const x = dsMon(h, b + L.party + i * L.size, L.size); if (!x) return { bad: "party" }; party.push(x); }
-    if (!subset(party.filter((x) => !x.egg).map((x) => x.sp), owned)) return { bad: "party not in Pokédex" };
+    let party = dsLiveParty(h, b, L, R), live = !!party;
+    if (!party) {
+      party = []; const n = h[b + L.count];
+      for (let i = 0; i < n; i++) { const x = dsMon(h, b + L.party + i * L.size, L.size); if (!x) return { bad: "party" }; party.push(x); }
+    }
+    // the live party may be ahead of a Pokédex that is only written on save: only check the saved one
+    if (!live && !subset(party.filter((x) => !x.egg).map((x) => x.sp), owned)) return { bad: "party not in Pokédex" };
     const badgeBits = h[b + L.badges] | (L.kanto ? h[b + L.kanto] << 8 : 0);
     return {
-      gen: L.gen, playSeconds: u16(h, b + L.time) * 3600 + h[b + L.time + 2] * 60 + h[b + L.time + 3], clock: h[b + L.time + 3],
+      gen: L.gen, playSeconds: u16(h, b + L.time) * 3600 + h[b + L.time + 2] * 60 + h[b + L.time + 3], clock: R.dsTick ? h[b + L.time + 3] : undefined,
       owned, seen: seenSet.size, badges: popcount(badgeBits), badgeBits, champion: !!L.kanto && h[b + L.kanto] > 0,
-      money: u32(h, b + L.money), coins: null, party, partyLive: true, map: null, here: null,
+      money: u32(h, b + L.money), coins: null, party, partyLive: live || R.dsTick, map: null, here: null,
     };
   }
 
   // ================================================================ driver
-  const R = { sys: "", gen: 0, version: "", fam: "", ds: "", gbBase: -1, ptr: 0, sb1: -1, party: -1, base: -1, cands: null, note: "starting", last: null };
+  const R = { sys: "", gen: 0, version: "", fam: "", ds: "", gbBase: -1, ptr: 0, sb1: -1, party: -1, base: -1, cands: null, tries: 0, dsTick: false, lp: -1, lpScan: 0, note: "starting", last: null };
   const core = (s) => `${s.owned.length}|${s.seen}|${s.badgeBits}|${s.champion}|${s.money}|${s.party.map((x) => x.sp + ":" + x.lv).join(",")}`;
   let lastJson = "";
 
@@ -338,7 +370,7 @@
       const s = readOnce();
       if (s.unsupported) { R.note = "this emulator core isn't supported for achievements"; return; }
       if (s.wait) { R.note = s.wait; R.last = null; return; }
-      if (s.bad) { R.note = "skipped a bad reading (" + s.bad + ")"; R.ptr = 0; R.sb1 = R.base = R.gbBase = -1; R.cands = null; R.last = null; return; }
+      if (s.bad) { R.note = "skipped a bad reading (" + s.bad + ")"; R.ptr = 0; R.sb1 = R.base = R.gbBase = R.lp = -1; R.cands = null; R.tries = 0; R.last = null; return; }
       const prev = R.last;
       R.last = s;
       if (!prev) { R.note = "checking"; return; }
@@ -353,14 +385,14 @@
       parent.postMessage({ source: "pokepc", type: "game-state", state: out }, location.origin);
     } catch (e) { R.note = "error: " + e.message; }
   }
-  function reset() { R.ptr = 0; R.sb1 = R.party = R.base = R.gbBase = -1; R.cands = null; R.last = null; lastJson = ""; }
+  function reset() { R.ptr = 0; R.sb1 = R.party = R.base = R.gbBase = R.lp = -1; R.cands = null; R.tries = 0; R.lpScan = 0; R.last = null; lastJson = ""; }
 
   window.LCReader = {
     /** Call once the game runs, with the game descriptor from lib/achievements (system, gen, version, family, ds). */
     start(game) {
       if (game) {
         R.sys = game.system === "gbc" ? "gb" : game.system; R.gen = game.gen; R.version = game.version; R.fam = game.family || ""; R.ds = game.ds || "";
-        setInterval(tick, 1000);
+        setInterval(tick, R.sys === "nds" ? 2000 : 1000);
       } else R.note = "this game doesn't have achievements yet";
       setInterval(() => parent.postMessage({ source: "pokepc", type: "reader-status", note: R.note, tracking: R.note === "tracking", supported: !!game }, location.origin), 3000);
     },

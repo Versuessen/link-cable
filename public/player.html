@@ -47,10 +47,20 @@
   const gm = () => window.EJS_emulator?.gameManager;
 
   // ---- helpers ----
+  // Storage (B2) occasionally answers "busy" without CORS headers, which the browser reports as "Failed to fetch".
+  // Every network step of a save is retried with a short back-off before it counts as a failure.
+  async function retry(fn, tries = 4) {
+    for (let i = 0; ; i++) {
+      try { return await fn(); } catch (e) {
+        if (i >= tries - 1 || e.noRetry) throw e;
+        await new Promise((r) => setTimeout(r, [800, 2500, 6000][i] ?? 6000));
+      }
+    }
+  }
   async function api(path, opts = {}) {
     const r = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", ...(opts.headers || {}) } });
     const body = await r.json().catch(() => ({}));
-    if (r.status === 401) { emit("auth"); throw new Error("logged out"); }
+    if (r.status === 401) { emit("auth"); throw Object.assign(new Error("logged out"), { noRetry: true }); }
     return { ok: r.ok, status: r.status, body };
   }
   async function hash(u8) {
@@ -61,8 +71,10 @@
   const gzip = async (u8) => new Uint8Array(await new Response(new Blob([u8]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer());
   const gunzip = async (buf) => new Uint8Array(await new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
   async function put(url, u8) {
-    const r = await fetch(url, { method: "PUT", body: u8, headers: { "Content-Type": "application/octet-stream" }, keepalive: u8.byteLength < 60_000 });
-    if (!r.ok) throw new Error("upload failed (" + r.status + ") — check bucket CORS");
+    await retry(async () => {
+      const r = await fetch(url, { method: "PUT", body: u8, headers: { "Content-Type": "application/octet-stream" } });
+      if (!r.ok) throw new Error("upload failed (" + r.status + ")");
+    });
   }
 
   async function fetchWithProgress(url, label) {
@@ -153,13 +165,13 @@
       }
       emit("saving", { reason });
       const [stateGz, shot] = await Promise.all([state ? gzip(state) : null, screenshot()]);
-      const { body: urls } = await api(`/api/saves/${saveId}`, { method: "POST", body: JSON.stringify({ hasState: !!stateGz, hasSram: !!sram, hasShot: !!shot }) });
+      const { body: urls } = await retry(async () => { const x = await api(`/api/saves/${saveId}`, { method: "POST", body: JSON.stringify({ hasState: !!stateGz, hasSram: !!sram, hasShot: !!shot }) }); if (!x.ok) throw new Error(x.body.error || "save failed"); return x; });
       await Promise.all([stateGz && put(urls.stateUrl, stateGz), sram && put(urls.sramUrl, sram), shot && put(urls.shotUrl, shot).catch(() => {})]);
       const now = Date.now();
-      const res = await api(`/api/saves/${saveId}`, { method: "PUT", keepalive: true, body: JSON.stringify({
+      const res = await retry(() => api(`/api/saves/${saveId}`, { method: "PUT", body: JSON.stringify({
         ver: urls.ver, baseVer: S.baseVer ?? null, force, reason, device, deviceId,
         hasState: !!stateGz, hasSram: !!sram, stateGz: true, hasShot: !!shot, localHour: new Date().getHours(), localDay: (function(d){return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")})(new Date()), playedDelta: Math.round((now - S.playedSince) / 1000),
-      }) });
+      }) }));
       if (res.status === 409 && res.body.conflict) {
         S.blocked = true;
         emit("conflict", { current: res.body.current });
@@ -167,11 +179,12 @@
       }
       if (!res.ok) throw new Error(res.body.error || "save failed");
       S.playedSince = now; S.baseVer = urls.ver; S.lastSyncAt = now; S.blocked = false;
-      S.lastHash = { state: hs, sram: hr };
+      S.lastHash = { state: hs, sram: hr }; S.failing = 0;
       emit("saved", { reason, at: now, meta: res.body.meta });
       return { ok: true };
     })();
-    S.busy = run.catch((e) => { emit("error", { message: e.message }); return { error: e.message }; }).finally(() => { S.busy = null; });
+    // a failed save never interrupts the game: the page shows it quietly and the next autosave tries again
+    S.busy = run.catch((e) => { S.failing = (S.failing || 0) + 1; emit("save-failed", { reason, message: e.message === "Failed to fetch" ? "Couldn't reach the cloud" : e.message, failing: S.failing }); return { error: e.message }; }).finally(() => { S.busy = null; });
     return S.busy;
   }
 
@@ -189,14 +202,20 @@
   function status() {
     const paused = !!window.EJS_emulator?.paused;
     return {
-      running: S.running, saving: !!S.busy, paused, lastSyncAt: S.lastSyncAt, blocked: S.blocked,
+      running: S.running, saving: !!S.busy, paused, failing: S.failing || 0, lastSyncAt: S.lastSyncAt, blocked: S.blocked,
       // "dirty" = there may be progress the cloud doesn't have
       dirty: S.running && (!!S.busy || (!paused && Date.now() - S.lastSyncAt > 4000)),
     };
   }
 
   // ---- lifecycle: autosave + leave detection ----
-  setInterval(() => { if (document.visibilityState === "visible" && !window.EJS_emulator?.paused) save("auto"); }, AUTOSAVE_MS);
+  // DS save states are several MB: autosave them half as often
+  let lastAuto = Date.now();
+  setInterval(() => {
+    const every = S.rom?.system === "nds" ? AUTOSAVE_MS * 2 : AUTOSAVE_MS;
+    if (Date.now() - lastAuto < every || document.visibilityState !== "visible" || window.EJS_emulator?.paused) return;
+    lastAuto = Date.now(); save("auto");
+  }, 5000);
   setInterval(() => emit("status", status()), 1000);
 
   document.addEventListener("visibilitychange", async () => {
@@ -216,6 +235,9 @@
     }
   });
 
+  // mouse movement over the game lets the page show its corner buttons (events don't cross the iframe)
+  let lastPtr = 0;
+  addEventListener("pointermove", () => { const t = Date.now(); if (t - lastPtr > 400) { lastPtr = t; emit("pointer"); } }, { passive: true });
   // Esc / F1 inside the game opens the PC overlay menu in the parent page
   addEventListener("keydown", (e) => { if (e.key === "Escape" || e.key === "F1") { e.preventDefault(); emit("menu"); } }, true);
 
@@ -225,6 +247,8 @@
     forceSave: () => save("manual", { force: true }),
     pullLatest, status,
     pause: () => window.EJS_emulator?.pause(), play: () => window.EJS_emulator?.play(),
+    setVolume: (v) => { try { window.EJS_emulator?.setVolume(v); } catch {} },
+    getVolume: () => window.EJS_emulator?.volume ?? 1,
     isRunning: () => S.running,
   };
 

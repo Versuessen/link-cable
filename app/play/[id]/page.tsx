@@ -6,14 +6,15 @@ import { SYSTEMS } from "../../../lib/games";
 import { ago, playtime } from "../../../lib/client";
 import Art, { tint } from "../../../components/Art";
 import Icon from "../../../components/Icon";
-import { BottomBar, Clock, H, Modal, Toasts, usePresence, useToasts } from "../../../components/Shell";
+import { BottomBar, Clock, H, Modal, Toasts, Toggle, usePresence, useToasts } from "../../../components/Shell";
 import { focusFirst, useNavEvent } from "../../../components/nav";
 import { sfx } from "../../../components/sfx";
 import { achievementsFor, newlyUnlocked, type GameState } from "../../../lib/achievements";
 import { RunBoard, useRun, MODE_LABEL } from "../../../components/RunBoard";
 
-type Status = { running: boolean; saving: boolean; paused: boolean; lastSyncAt: number; blocked: boolean; dirty: boolean };
-type Sync = { save: (r?: string) => Promise<any>; forceSave: () => Promise<any>; pullLatest: (v?: string) => Promise<boolean>; status: () => Status; pause: () => void; play: () => void };
+type Status = { running: boolean; saving: boolean; paused: boolean; lastSyncAt: number; blocked: boolean; dirty: boolean; failing: number };
+type Sync = { save: (r?: string) => Promise<any>; forceSave: () => Promise<any>; pullLatest: (v?: string) => Promise<boolean>; status: () => Status; pause: () => void; play: () => void; setVolume: (v: number) => void; getVolume: () => number };
+type Pane = "game" | "run" | "ach";
 
 export default function Play({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -26,7 +27,11 @@ export default function Play({ params }: { params: Promise<{ id: string }> }) {
   const [exiting, setExiting] = useState<string | null>(null);
   const [conflict, setConflict] = useState<SaveVersion | null>(null);
   const [error, setError] = useState<{ message: string; fatal?: boolean } | null>(null);
-  const [chip, setChip] = useState(true);
+  const [hud, setHud] = useState(true);
+  const [pane, setPane] = useState<Pane>("game");
+  const [muted, setMuted] = useState(false);
+  const [full, setFull] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
   const toasts = useToasts();
   usePresence(rom?.title);
   // ---- playthroughs: ?run=<id> plays that run's own saves and feeds its tracker
@@ -82,7 +87,7 @@ export default function Play({ params }: { params: Promise<{ id: string }> }) {
   const leaving = useRef(false);
   const sync = () => (frame.current?.contentWindow as any)?.pokeSync as Sync | undefined;
 
-  const openOverlay = useCallback(() => { sync()?.pause(); setOverlay(true); setTimeout(() => focusFirst(".overlay-menu [data-autofocus]"), 40); }, []);
+  const openOverlay = useCallback((p: Pane = "game") => { sync()?.pause(); setPane(p); setOverlay(true); setBoard(false); setTimeout(() => focusFirst(".pause [data-autofocus]"), 40); }, []);
   const closeOverlay = useCallback(() => { setOverlay(false); sync()?.play(); frame.current?.focus(); frame.current?.contentWindow?.focus(); }, []);
 
   useEffect(() => {
@@ -99,7 +104,15 @@ export default function Play({ params }: { params: Promise<{ id: string }> }) {
             : { title: "New game", text: "Progress syncs to the cloud automatically", icon: "cloud" });
           break;
         case "status": setStatus(d); break;
-        case "saved": if (d.reason !== "auto" && d.reason !== "leave") { sfx("saved"); toasts.push({ title: "Saved to cloud", icon: "cloudok" }, 2000); } break;
+        case "saved":
+          setSaveErr(null);
+          if (d.reason !== "auto" && d.reason !== "leave") { sfx("saved"); toasts.push({ title: "Saved to cloud", icon: "cloudok" }, 2000); }
+          break;
+        case "save-failed":
+          // autosaves retry by themselves: only a save you asked for gets a pop-up
+          setSaveErr(d.message);
+          if (d.reason === "manual" || d.reason === "ingame") toasts.push({ title: "Couldn't save to the cloud", text: `${d.message} · your game keeps running, try again in a moment`, icon: "wifioff", error: true }, 6000);
+          break;
         case "conflict": sync()?.pause(); setConflict(d.current); break;
         case "error": setError({ message: d.message, fatal: d.fatal }); break;
         case "menu": openOverlay(); break;
@@ -134,12 +147,16 @@ export default function Play({ params }: { params: Promise<{ id: string }> }) {
     return () => removeEventListener("beforeunload", before);
   }, []);
 
-  // status chip shows on mouse move, hides after 2.5s
+  // the corner buttons show on mouse move and fade after 2.5 s
   useEffect(() => {
-    let t: any; const show = () => { setChip(true); clearTimeout(t); t = setTimeout(() => setChip(false), 2500); };
-    show(); addEventListener("pointermove", show);
-    return () => { removeEventListener("pointermove", show); clearTimeout(t); };
+    let t: any; const show = () => { setHud(true); clearTimeout(t); t = setTimeout(() => setHud(false), 2500); };
+    const fromGame = (e: MessageEvent) => { if (e.data?.source === "pokepc" && e.data.type === "pointer") show(); };
+    show(); addEventListener("pointermove", show); addEventListener("message", fromGame);
+    return () => { removeEventListener("pointermove", show); removeEventListener("message", fromGame); clearTimeout(t); };
   }, []);
+  useEffect(() => { const f = () => setFull(!!document.fullscreenElement); document.addEventListener("fullscreenchange", f); return () => document.removeEventListener("fullscreenchange", f); }, []);
+  const toggleFull = () => { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); else document.documentElement.requestFullscreen().catch(() => {}); };
+  const toggleMute = (m: boolean) => { setMuted(m); sync()?.setVolume(m ? 0 : 1); };
 
   useNavEvent("nav:menu", () => (overlay ? closeOverlay() : openOverlay()), [overlay]);
   useNavEvent("nav:back", () => { if (overlay && !exiting && !conflict && !error) closeOverlay(); }, [overlay, exiting, conflict, error]);
@@ -157,23 +174,30 @@ export default function Play({ params }: { params: Promise<{ id: string }> }) {
   }
 
   const s = status;
-  const syncText = !s?.running ? "Starting…" : s.blocked ? "Sync paused" : s.saving ? "Saving…" : `Saved ${ago(s.lastSyncAt)}`;
+  const failing = !!saveErr && !s?.saving;
+  const syncText = !s?.running ? "Starting…" : s.blocked ? "Sync paused" : s.saving ? "Saving…" : failing ? "Cloud unreachable, retrying" : `Saved ${ago(s.lastSyncAt)}`;
   const inGame = !overlay && !boot && !conflict && !error;
+  const have = ach.current.have ?? {};
+  const recent = set ? set.filter((x) => have[x.id]).sort((a, b) => have[b.id] - have[a.id]).slice(0, 5) : [];
+  const achPts = set ? set.filter((x) => have[x.id]).reduce((n, x) => n + x.points, 0) : 0;
+  const achPct = set?.length ? achCount / set.length : 0;
+  const session = Math.round((Date.now() - sessionStart.current) / 60000);
 
   return (
     <main className="playview" style={{ ["--tint" as any]: tint(rom) }} {...(inGame ? { "data-nav-off": "" } : {})}>
       {runReady && <iframe ref={frame} src={`/player.html?id=${encodeURIComponent(id)}${runId ? `&run=${runId}` : ""}`} title="emulator" allow="autoplay; fullscreen; gamepad" />}
 
-      <button className={`status-chip px-frame ${chip || s?.saving ? "show" : ""}`} onClick={openOverlay}>
-        <Icon name="home" size={18} /><span>Menu</span><i />
-        <Icon name={s?.saving ? "sync" : "cloudok"} size={18} className={s?.saving ? "spin" : "ok"} /><span>{syncText}</span>
-      </button>
-      {run.meta && (
-        <button className={`run-chip px-frame ${chip || board ? "show" : ""}`} onClick={() => { setBoard((b) => !b); sfx("tab"); }}>
-          <Icon name="layers" size={18} /><span>{MODE_LABEL[run.meta.mode]}{run.meta.name ? ` · ${run.meta.name}` : ""}</span>
-        </button>
+      {/* corner HUD: a menu button that only shows when you move the mouse, and a tiny sync mark */}
+      <div className={`hud ${hud && inGame ? "show" : ""}`}>
+        <button className="hud-btn" onClick={() => openOverlay()} aria-label="Menu (Esc)" title="Menu · Esc"><Icon name="menu" size={20} /></button>
+        {run.meta && <button className={`hud-btn ${board ? "on" : ""}`} onClick={() => { setBoard((b) => !b); sfx("tab"); }} aria-label="Playthrough board" title={`${MODE_LABEL[run.meta.mode]} board`}><Icon name={run.meta.mode === "soullink" ? "link" : run.meta.mode === "nuzlocke" ? "flame" : "layers"} size={20} /></button>}
+      </div>
+      {inGame && (s?.saving || failing || s?.blocked) && (
+        <span className={`sync-dot ${failing || s?.blocked ? "warn" : ""}`} title={syncText} aria-label={syncText}>
+          <Icon name={failing || s?.blocked ? "wifioff" : "sync"} size={14} className={s?.saving ? "spin" : ""} />
+        </span>
       )}
-      {run.meta && board && (
+      {run.meta && board && inGame && (
         <aside className="run-side"><button className="run-side-x" aria-label="Close board" onClick={() => { setBoard(false); frame.current?.focus(); }}><Icon name="close" size={18} /></button><RunBoard run={run} compact /></aside>
       )}
 
@@ -183,6 +207,7 @@ export default function Play({ params }: { params: Promise<{ id: string }> }) {
           <div className="launch-card">
             {rom && <div className="launch-cap"><Art rom={rom} /></div>}
             <h1>{rom?.title ?? "Launching"}</h1>
+            {run.meta && <p className="launch-run"><span className={`pill mode-${run.meta.mode}`}>{MODE_LABEL[run.meta.mode]}</span> {run.meta.name}</p>}
             <p>{boot.label}…</p>
             <div className="bar wide"><i style={{ width: `${boot.pct * 100}%` }} /></div>
             <small>First launch downloads the ROM · after that it&apos;s cached on this device</small>
@@ -191,27 +216,56 @@ export default function Play({ params }: { params: Promise<{ id: string }> }) {
       )}
 
       {overlay && (
-        <div className="scrim left" data-nav-scope onClick={(e) => e.target === e.currentTarget && closeOverlay()}>
-          <nav className="drawer overlay-menu">
-            <div className="ov-head">
-              {rom && <div className="ov-art"><Art rom={rom} prefer="shot" label={false} /></div>}
-              <strong>{rom?.title}</strong>
-              <span>{rom && SYSTEMS[rom.system].label} · <Clock /></span>
-              <span className={`ov-sync ${s?.blocked ? "warn" : ""}`}><Icon name={s?.saving ? "sync" : "cloudok"} size={18} />{syncText}</span>
+        <div className="pause" data-nav-scope onClick={(e) => e.target === e.currentTarget && closeOverlay()}>
+          <div className="pause-top">
+            <span className="pause-title"><b>{rom?.title}</b>{run.meta && <span className={`pill mode-${run.meta.mode}`}>{MODE_LABEL[run.meta.mode]}{run.meta.name ? ` · ${run.meta.name}` : ""}</span>}</span>
+            <span className="pause-meta"><span className={`pause-sync ${failing || s?.blocked ? "warn" : ""}`}><Icon name={s?.saving ? "sync" : failing ? "wifioff" : "cloudok"} size={16} className={s?.saving ? "spin" : ""} />{syncText}</span><Clock /></span>
+          </div>
+          {exiting ? <div className="pause-exiting"><Icon name="sync" size={30} className="spin" />{exiting}</div> : (
+            <div className="pause-grid">
+              <nav className="pause-menu">
+                <button data-nav data-autofocus className="pm-item primary" onClick={closeOverlay}><Icon name="play" size={24} />Resume</button>
+                <button data-nav className="pm-item" onClick={async () => { const r = await sync()?.save("manual"); if (r?.unchanged) toasts.push({ title: "Already up to date", icon: "cloudok" }, 1600); }}><Icon name="cloudup" size={24} />Save now</button>
+                <div className="pm-sep" />
+                <button data-nav className={`pm-item ${pane === "game" ? "on" : ""}`} onFocus={() => setPane("game")} onClick={() => setPane("game")}><Icon name="info" size={24} />Overview</button>
+                {run.meta && <button data-nav className={`pm-item ${pane === "run" ? "on" : ""}`} onFocus={() => setPane("run")} onClick={() => setPane("run")}><Icon name={run.meta.mode === "soullink" ? "link" : "flame"} size={24} />Playthrough</button>}
+                {set && <button data-nav className={`pm-item ${pane === "ach" ? "on" : ""}`} onFocus={() => setPane("ach")} onClick={() => setPane("ach")}><Icon name="star" size={24} />Achievements<span className="pm-count">{achCount}/{set.length}</span></button>}
+                <div className="pm-sep" />
+                <div className="pm-row"><span><Icon name="sound" size={22} />Sound</span><Toggle label="Sound" on={!muted} onChange={(v) => toggleMute(!v)} /></div>
+                <button data-nav className="pm-item" onClick={toggleFull}><Icon name="layers" size={24} />{full ? "Exit full screen" : "Full screen"}</button>
+                <div className="pm-sep" />
+                <button data-nav className="pm-item" onClick={() => exit(true)}><Icon name="home" size={24} />Save &amp; quit</button>
+                <button data-nav className="pm-item danger" onClick={() => exit(false)}><Icon name="power" size={24} />Quit without saving</button>
+              </nav>
+
+              <section className="pause-pane">
+                {pane === "game" && (
+                  <div className="pp-game">
+                    {rom && <div className="pp-art"><Art rom={rom} prefer="shot" label={false} /></div>}
+                    <div className="pp-stats">
+                      <div><small>This session</small><b>{session < 1 ? "just started" : `${session} min`}</b></div>
+                      <div><small>Total play time</small><b>{playtime((rom?.playSeconds ?? 0) + session * 60)} h</b></div>
+                      <div><small>System</small><b>{rom && SYSTEMS[rom.system].label}</b></div>
+                      {set && <div><small>Achievements</small><b>{Math.round(achPct * 100)}%</b></div>}
+                    </div>
+                    {failing && <p className="pp-warn"><Icon name="wifioff" size={18} />The last autosave couldn&apos;t reach the cloud ({saveErr}). It retries on its own; nothing is lost while the game keeps running.</p>}
+                    <p className="pp-note">Autosaves every {rom?.system === "nds" ? "90" : "45"} s and when you leave this tab. Esc or F1 opens this menu.</p>
+                  </div>
+                )}
+                {pane === "run" && run.meta && <RunBoard run={run} compact />}
+                {pane === "ach" && set && (
+                  <div className="pp-ach">
+                    <div className="pp-ring" style={{ ["--p" as any]: achPct }}><b>{achCount}</b><small>of {set.length}</small></div>
+                    <div className="pp-ach-side">
+                      <p><b>{achPts}</b> points · <span className={reader?.tracking ? "ok" : "dim"}>{reader?.tracking ? "tracking live" : reader?.note ?? "starting"}</span></p>
+                      <h4>Recently unlocked</h4>
+                      {recent.length ? recent.map((x) => <div key={x.id} className="pp-ach-row"><Icon name="star" size={18} /><span><b>{x.title}</b><small>{x.desc}</small></span><em>+{x.points}</em></div>) : <p className="dim small">Nothing yet this game.</p>}
+                    </div>
+                  </div>
+                )}
+              </section>
             </div>
-            {exiting ? <div className="ov-exiting"><Icon name="sync" size={28} className="spin" />{exiting}</div> : (
-              <>
-                <button data-nav data-autofocus className="drawer-item" onClick={closeOverlay}><Icon name="play" size={26} />Resume game</button>
-                <button data-nav className="drawer-item" onClick={async () => { const r = await sync()?.save("manual"); if (r?.unchanged) toasts.push({ title: "Already up to date", icon: "cloudok" }, 1600); }}><Icon name="cloudup" size={26} />Save to cloud</button>
-                {run.meta && <button data-nav className="drawer-item" onClick={() => { setBoard(true); closeOverlay(); }}><Icon name="layers" size={26} />Playthrough board</button>}
-                <div className="drawer-sep" />
-                <button data-nav className="drawer-item" onClick={() => exit(true)}><Icon name="home" size={26} />Save &amp; quit</button>
-                <button data-nav className="drawer-item danger" onClick={() => exit(false)}><Icon name="power" size={26} />Quit without saving</button>
-                {set && <p className="ov-ach"><Icon name="star" size={18} /><b>{achCount} / {set.length}</b> achievements · {reader?.tracking ? "tracking live" : reader?.note ?? "starting"}</p>}
-                <p className="ov-note">Autosaves every 45 s and whenever you leave this tab.{rom?.playSeconds ? ` Total ${playtime(rom.playSeconds)} hrs.` : ""}</p>
-              </>
-            )}
-          </nav>
+          )}
         </div>
       )}
 
@@ -232,7 +286,7 @@ export default function Play({ params }: { params: Promise<{ id: string }> }) {
       )}
 
       {(overlay || boot) && <BottomBar onMenu={overlay ? closeOverlay : undefined} hints={[{ ...H.back, label: overlay ? "Resume" : "Back" }, H.select]} />}
-      <Toasts items={toasts.items} />
+      <div className={inGame ? "toasts-game" : ""}><Toasts items={toasts.items} /></div>
     </main>
   );
 }
