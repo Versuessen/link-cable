@@ -8,8 +8,8 @@ import { validAvatarUrl } from "./avatars";
  * their own key prefix, so two people can use the site at the same time without touching
  * each other's data.
  */
-export type User = { id: string; name: string; color: string; salt: string; hash: string; prefix: string; createdAt: number; owner?: boolean; avatar?: string; revokedBefore?: number };
-export type PublicUser = Pick<User, "id" | "name" | "color" | "owner" | "avatar">;
+export type User = { id: string; name: string; color: string; salt: string; hash: string; prefix: string; createdAt: number; owner?: boolean; avatar?: string; revokedBefore?: number; colorAuto?: boolean };
+export type PublicUser = Pick<User, "id" | "name" | "color" | "owner" | "avatar" | "colorAuto">;
 const USERS = "shared/users.json";
 const COLORS = ["#ff9f1a", "#3a8dff", "#16b26a", "#e5484d", "#9b5cf6", "#00b4c8", "#f05aa6", "#7c8a99"];
 
@@ -21,7 +21,7 @@ export async function listUsers(fresh = false): Promise<User[]> {
   return users;
 }
 async function saveUsers(users: User[]) { await putJson(USERS, users); memo = { at: Date.now(), users }; }
-export const toPublic = (u: User): PublicUser => ({ id: u.id, name: u.name, color: u.color, owner: u.owner, avatar: u.avatar });
+export const toPublic = (u: User): PublicUser => ({ id: u.id, name: u.name, color: u.color, owner: u.owner, avatar: u.avatar, colorAuto: u.colorAuto });
 
 const enc = new TextEncoder();
 async function pbkdf2(password: string, salt: string) {
@@ -61,7 +61,7 @@ export async function createUser(name: string, password: string, legacyPrefix: b
   return user;
 }
 
-export async function updateUser(uid: string, patch: { name?: string; password?: string; color?: string; avatar?: string | null; revokedBefore?: number }) {
+export async function updateUser(uid: string, patch: { name?: string; password?: string; color?: string; avatar?: string | null; revokedBefore?: number; colorAuto?: boolean }) {
   const users = await listUsers(true);
   const u = users.find((x) => x.id === uid);
   if (!u) throw Object.assign(new Error("not found"), { status: 404 });
@@ -73,6 +73,7 @@ export async function updateUser(uid: string, patch: { name?: string; password?:
   if (patch.revokedBefore) u.revokedBefore = patch.revokedBefore;
   if (patch.name !== undefined && patch.name.trim().length < 2) throw Object.assign(new Error("Name needs at least 2 characters"), { status: 400 });
   if (patch.color && /^#[0-9a-f]{6}$/i.test(patch.color)) u.color = patch.color;
+  if (typeof patch.colorAuto === "boolean") u.colorAuto = patch.colorAuto || undefined;
   if (patch.avatar === null) delete u.avatar;
   else if (patch.avatar !== undefined) {
     if (!validAvatarUrl(patch.avatar)) throw Object.assign(new Error("unsupported avatar image"), { status: 400 });
@@ -105,7 +106,7 @@ export async function deleteUser(uid: string) {
 }
 
 // ---------------------------------------------------------------- per-user profile (stats + flair), its own file → no cross-user write races
-export type Profile = { playSeconds?: number; saves?: number; nightSaves?: number; earlySaves?: number; devices?: string[]; flair?: { level: number; frame?: string; badge?: { id: string; step: number } | null } };
+export type Profile = { day?: { d: string; n: number }; streak?: number; bestStreak?: number; dayMax?: number; playSeconds?: number; saves?: number; nightSaves?: number; earlySaves?: number; devices?: string[]; flair?: { level: number; frame?: string; badge?: { id: string; step: number } | null } };
 export const profileKey = (u: Pick<User, "prefix">) => `${u.prefix}profile.json`;
 export const getProfile = async (u: Pick<User, "prefix">) => (await getJson<Profile>(profileKey(u))) ?? {};
 export async function patchProfile(u: Pick<User, "prefix">, patch: Partial<Profile>) {

@@ -1,8 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 
-export type Prefs = { theme: "light" | "dark" | "system"; sounds: boolean; clock24: boolean; reduceMotion: boolean; labs: boolean; ptrFlair: boolean; ptrMinimal: boolean };
-const DEFAULTS: Prefs = { theme: "system", sounds: true, clock24: true, reduceMotion: false, labs: false, ptrFlair: false, ptrMinimal: false };
+export type Prefs = { theme: "light" | "dark" | "system"; sounds: boolean; clock24: boolean; reduceMotion: boolean; labs: boolean; ptrFlair: boolean; ptrMinimal: boolean; devLevel: number | null; devBadge: { id: string; step: number } | null; devAll: boolean };
+const DEFAULTS: Prefs = { theme: "system", sounds: true, clock24: true, reduceMotion: false, labs: false, ptrFlair: false, ptrMinimal: false, devLevel: null, devBadge: null, devAll: false };
 const KEY = "pc_prefs";
 
 export function readPrefs(): Prefs {

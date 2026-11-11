@@ -5,7 +5,7 @@ import { RomView, SYSTEMS, System, systemFromFilename } from "../lib/games";
 import { ago, api, playtime, putWithProgress } from "../lib/client";
 import Art from "../components/Art";
 import Icon from "../components/Icon";
-import { BottomBar, H, QuickMenu, TopBar, Toasts, useToasts } from "../components/Shell";
+import { BottomBar, H, QuickMenu, TopBar, Toasts, useToasts, type MenuAnchor } from "../components/Shell";
 import { focusFirst, navigate, useNavEvent } from "../components/nav";
 import { sfx } from "../components/sfx";
 import GamePage from "../components/GamePage";
@@ -23,7 +23,7 @@ export default function Home() {
   const [focused, setFocused] = useState<RomView | null>(null);
   const [view, setView] = useState<View>("home");
   const [open, setOpen] = useState<RomView | null>(null);
-  const [menu, setMenu] = useState(false);
+  const [menu, setMenu] = useState<MenuAnchor | null>(null);
   const [search, setSearch] = useState(false);
   const [timeline, setTimeline] = useState<TimelineItem[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -64,33 +64,38 @@ export default function Home() {
   // ---- controller bindings ----
   const overlayOpen = !!(open || menu || search);
   useNavEvent("nav:back", () => { if (!overlayOpen && view !== "home") go("home"); }, [overlayOpen, view]);
-  useNavEvent("nav:menu", () => { if (!open && !search) setMenu((m) => !m); }, [open, search]);
+  useNavEvent("nav:menu", () => { if (!open && !search) setMenu((m) => (m ? null : "bottom")); }, [open, search]);
 
   // Hold ↓ on the game row → All Games. A short tap still moves down to the dock as usual;
   // holding never lets the cursor drop into the dock — the cue fills up instead and opens the library.
   const TAP_MS = 200, HOLD_MS = 700;
-  const hold = useRef<{ start: number; key: boolean; raf: number } | null>(null);
+  const hold = useRef<{ start: number; key: boolean; raf: number; dir: "up" | "down" } | null>(null);
   const keyDown = useRef(false);
   useEffect(() => {
-    const kd = (e: KeyboardEvent) => { if (e.key === "ArrowDown") keyDown.current = true; };
-    const ku = (e: KeyboardEvent) => { if (e.key === "ArrowDown") keyDown.current = false; };
-    const padDown = () => Array.from(navigator.getGamepads?.() ?? []).some((p) => p && (p.buttons[13]?.pressed || (p.axes[1] ?? 0) > 0.6));
+    const kd = (e: KeyboardEvent) => { if (e.key === "ArrowDown" || e.key === "ArrowUp") keyDown.current = true; };
+    const ku = (e: KeyboardEvent) => { if (e.key === "ArrowDown" || e.key === "ArrowUp") keyDown.current = false; };
+    const padDown = () => Array.from(navigator.getGamepads?.() ?? []).some((p) => p && (p.buttons[13]?.pressed || p.buttons[12]?.pressed || Math.abs(p.axes[1] ?? 0) > 0.6));
     const setP = (v: number) => homeRef.current?.style.setProperty("--hold", v.toFixed(3));
     const end = () => { if (hold.current) cancelAnimationFrame(hold.current.raf); hold.current = null; setHolding(false); setP(0); };
     const tick = () => {
       const h = hold.current; if (!h) return;
       const t = performance.now() - h.start;
-      if (!(h.key ? keyDown.current : padDown())) { end(); if (t < TAP_MS) navigate("down", true); return; } // released → it was a tap
+      if (!(h.key ? keyDown.current : padDown())) { end(); if (t < TAP_MS) navigate(h.dir, true); return; } // released → it was a tap
       if (t > TAP_MS) { setHolding(true); setP(Math.min(1, (t - TAP_MS) / (HOLD_MS - TAP_MS))); }
-      if (t >= HOLD_MS) { end(); sfx("open"); go("library"); return; }
+      if (t >= HOLD_MS) { const d = h.dir; end(); go(d === "up" ? "home" : "library"); return; }
       h.raf = requestAnimationFrame(tick);
     };
     const onMove = (e: Event) => {
-      const { dir, from } = (e as CustomEvent).detail as { dir: string; from: Element | null };
-      if (view !== "home" || overlayOpen || dir !== "down" || !from?.closest(".carousel")) return;
+      const { dir, from } = (e as CustomEvent).detail as { dir: string; from: HTMLElement | null };
+      if (overlayOpen) return;
+      const down = view === "home" && dir === "down" && !!from?.closest(".carousel");
+      // All Games: hold ↑ on the top row to go back to the recent games (a tap still moves up as usual)
+      const first = document.querySelector<HTMLElement>(".cardgrid .card");
+      const up = view === "library" && dir === "up" && !!from?.closest(".cardgrid") && !!first && from!.offsetTop <= first.offsetTop + 4;
+      if (!down && !up) return;
       e.preventDefault();                 // key-repeat / pad-repeat while holding lands here too
       if (hold.current) return;
-      hold.current = { start: performance.now(), key: keyDown.current, raf: 0 };
+      hold.current = { start: performance.now(), key: keyDown.current, raf: 0, dir: up ? "up" : "down" };
       hold.current.raf = requestAnimationFrame(tick);
     };
     addEventListener("keydown", kd, true); addEventListener("keyup", ku, true); addEventListener("nav:move", onMove);
@@ -112,7 +117,7 @@ export default function Home() {
     try {
       const { id, uploadUrl } = await api<{ id: string; uploadUrl: string }>("/api/roms", { method: "POST", body: JSON.stringify({ filename: file.name, size: file.size }) });
       await putWithProgress(uploadUrl, file, (p) => t.update({ progress: p }));
-      t.update({ title: "Identifying cartridge…", progress: undefined, icon: "wand" });
+      t.update({ title: "Identifying cartridge…", progress: undefined, icon: "cart" });
       await api(`/api/roms/${id}`, { method: "POST", body: JSON.stringify({ action: "commit", filename: file.name, size: file.size }) });
       const list = await load();
       const added = list.find((r) => r.id === id);
@@ -144,14 +149,14 @@ export default function Home() {
     { icon: "clock", label: "Save Timeline", onClick: () => go("timeline"), color: "#9b5cf6" },
     { icon: "plus", label: "Add Games", onClick: () => go("add"), color: "#16b26a" },
     { icon: "search", label: "Search", onClick: () => setSearch(true), color: "#f59e0b" },
-    { icon: "gear", label: "Settings", onClick: () => { setSettingsSec("appearance"); go("settings"); }, color: "#64748b" },
+    { icon: "gear", label: "Settings", onClick: () => { setSettingsSec("profile"); go("settings"); }, color: "#64748b" },
   ];
   const [dockFocus, setDockFocus] = useState<string | null>(null);
 
   return (
-    <main ref={homeRef} className={`home ${holding ? "holding" : ""}`} style={{ ["--tint" as any]: tintColor }}>
+    <main ref={homeRef} className={`home ${holding ? "holding" : ""} v-${view}`} style={{ ["--tint" as any]: tintColor }}>
       <div className="wash live" aria-hidden><i /><i /><i /></div>
-      <TopBar busy={busy} onProfile={() => setMenu(true)} onSearch={() => setSearch(true)} />
+      <TopBar busy={busy} onProfile={() => { sfx("open"); setMenu("top"); }} onSearch={() => setSearch(true)} />
 
       {view === "home" && (
         <section className="homeview">
@@ -190,7 +195,9 @@ export default function Home() {
               ))}
             </div>
             <div className="caption">
-              {dockFocus ? <h1>{dockFocus}</h1> : focused ? (
+              {dockFocus === "All Games" ? (
+                <><h1>All Games</h1><div className="caption-hints"><button className="hint" onClick={() => go("library")}><kbd className="key">Enter</kbd><span className="glyph">A</span>Open</button><span className="caption-meta">{roms?.length ?? 0} in your library</span></div></>
+              ) : dockFocus ? <><h1>{dockFocus}</h1><div className="caption-hints" /></> : focused ? (
                 <>
                   <h1>{focused.title}</h1>
                   <div className="caption-hints">
@@ -207,6 +214,12 @@ export default function Home() {
         </section>
       )}
 
+      {view === "library" && (
+        <div className="uphint" aria-hidden={!holding}>
+          <span className="downhint-text" data-text="Recent Games">Recent Games</span>
+          <span className="chevrons up"><i /><i /><i /></span>
+        </div>
+      )}
       {view === "library" && <LibraryView roms={roms ?? []} onBack={() => go("home")} onOpen={(r) => { sfx("open"); setOpen(r); }} />}
       {view === "timeline" && <TimelineView items={timeline} roms={roms ?? []} onBack={() => go("home")} onOpen={(id) => { const r = roms?.find((x) => x.id === id); if (r) setOpen(r); }} />}
       {view === "add" && <AddView roms={roms ?? []} onBack={() => go("home")} onPick={() => fileInput.current?.click()} />}
@@ -214,7 +227,7 @@ export default function Home() {
 
       <input ref={fileInput} type="file" multiple accept=".gb,.gbc,.gba,.nds" hidden onChange={(e) => { Array.from(e.target.files ?? []).forEach(pick); e.target.value = ""; }} />
 
-      <BottomBar onMenu={() => setMenu(true)} hints={view === "home" ? [H.options, H.start] : [H.back, H.select]} />
+      <BottomBar onMenu={() => { sfx("open"); setMenu("bottom"); }} hints={view === "home" ? [H.options, H.start] : [H.back, H.select]} />
 
       {dragging && <div className="scrim drop"><div className="dropzone big"><Icon name="plus" size={56} /><strong>Drop to add</strong></div></div>}
 
@@ -228,7 +241,7 @@ export default function Home() {
           }} />
       )}
       {search && roms && <Search roms={roms} onClose={() => setSearch(false)} onPick={(r) => { setSearch(false); setOpen(r); }} />}
-      {menu && <QuickMenu onClose={() => setMenu(false)} onHome={view !== "home" ? () => go("home") : undefined}
+      {menu && <QuickMenu key={menu} anchor={menu} onAnchor={setMenu} onClose={() => setMenu(null)} onHome={view !== "home" ? () => go("home") : undefined}
         onProfile={(sec) => { setSettingsSec(sec ?? "profile"); go("settings"); }} />}
       <Toasts items={toasts.items} />
     </main>

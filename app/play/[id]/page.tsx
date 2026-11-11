@@ -6,7 +6,7 @@ import { SYSTEMS } from "../../../lib/games";
 import { ago, playtime } from "../../../lib/client";
 import Art, { tint } from "../../../components/Art";
 import Icon from "../../../components/Icon";
-import { BottomBar, Clock, H, Modal, Toasts, useToasts } from "../../../components/Shell";
+import { BottomBar, Clock, H, Modal, Toasts, usePresence, useToasts } from "../../../components/Shell";
 import { focusFirst, useNavEvent } from "../../../components/nav";
 import { sfx } from "../../../components/sfx";
 
@@ -26,6 +26,7 @@ export default function Play({ params }: { params: Promise<{ id: string }> }) {
   const [error, setError] = useState<{ message: string; fatal?: boolean } | null>(null);
   const [chip, setChip] = useState(true);
   const toasts = useToasts();
+  usePresence(rom?.title);
   const leaving = useRef(false);
   const sync = () => (frame.current?.contentWindow as any)?.pokeSync as Sync | undefined;
 

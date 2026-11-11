@@ -3,7 +3,8 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Icon, { Avatar } from "../../components/Icon";
 import { EquippedBadge, FlairAvatar, type FlairSnapshot } from "../../components/Flair";
-import { Clock } from "../../components/Shell";
+import { Clock, HintButton, H } from "../../components/Shell";
+import { usePrefs } from "../../lib/prefs";
 import { focusFirst, useNavEvent } from "../../components/nav";
 import { sfx } from "../../components/sfx";
 
@@ -17,6 +18,9 @@ function Lock() {
   const [date, setDate] = useState("");
   const [leaving, setLeaving] = useState(false);
   const next = useSearchParams().get("next") || "/";
+  const [prefs] = usePrefs();
+  // every picture (and the + circle) gets the same stage, so framed and unframed line up
+  const stage = prefs.ptrFlair ? Math.round(120 * (prefs.ptrMinimal ? 36 : 58) / 30) : 132;
 
   useEffect(() => {
     setDate(new Date().toLocaleDateString("en", { weekday: "long", day: "numeric", month: "long" }));
@@ -40,15 +44,15 @@ function Lock() {
       {mode.kind === "pick" && users && (
         <div className="lock-card wide">
           <h2>Who&apos;s playing?</h2>
-          <div className="userrow">
+          <div className="userrow" style={{ ["--stage" as any]: `${stage}px` }}>
             {users.map((u) => (
               <button key={u.id} data-nav className="userbtn" onClick={() => { setMode({ kind: "password", user: u }); }}>
-                <FlairAvatar name={u.name} color={u.color} src={u.avatar} size={120} flair={u.flair} />
+                <span className="user-stage"><FlairAvatar name={u.name} color={u.color} src={u.avatar} size={120} flair={u.flair} /></span>
                 <span className="user-name">{u.name}<EquippedBadge flair={u.flair} size={26} /></span>
               </button>
             ))}
             <button data-nav className="userbtn add" onClick={() => setMode({ kind: "create", first: false })}>
-              <span className="add-circle"><Icon name="plus" size={44} stroke={2.4} /></span>
+              <span className="user-stage"><span className="add-circle"><Icon name="plus" size={44} stroke={2.4} /></span></span>
               <span>Add user</span>
             </button>
           </div>
@@ -60,8 +64,8 @@ function Lock() {
       <footer className="bottombar">
         <span className="hint"><Icon name="cart" size={22} /></span>
         <div className="hints">
-          {mode.kind !== "pick" && !(mode.kind === "create" && mode.first) && <span className="hint"><kbd className="key">Esc</kbd><span className="glyph">B</span>Back</span>}
-          <span className="hint"><kbd className="key">Enter</kbd><span className="glyph">A</span>OK</span>
+          {mode.kind !== "pick" && !(mode.kind === "create" && mode.first) && <HintButton h={H.back} />}
+          {mode.kind === "pick" && <HintButton h={{ ...H.select, label: "OK" }} />}
         </div>
       </footer>
     </main>

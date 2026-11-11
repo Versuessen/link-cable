@@ -153,7 +153,7 @@
       const now = Date.now();
       const res = await api(`/api/saves/${id}`, { method: "PUT", keepalive: true, body: JSON.stringify({
         ver: urls.ver, baseVer: S.baseVer ?? null, force, reason, device, deviceId,
-        hasState: !!stateGz, hasSram: !!sram, stateGz: true, hasShot: !!shot, localHour: new Date().getHours(), playedDelta: Math.round((now - S.playedSince) / 1000),
+        hasState: !!stateGz, hasSram: !!sram, stateGz: true, hasShot: !!shot, localHour: new Date().getHours(), localDay: (function(d){return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")})(new Date()), playedDelta: Math.round((now - S.playedSince) / 1000),
       }) });
       if (res.status === 409 && res.body.conflict) {
         S.blocked = true;

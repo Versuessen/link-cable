@@ -1,6 +1,8 @@
 // Soft UI ticks (WebAudio sine blips) — the console-menu feel, no audio files needed.
 import { readPrefs } from "../lib/prefs";
 let ctx: AudioContext | null = null;
+/** when the last sound was requested: lets the global click handler add a default click only if nothing else played */
+export let lastSfx = 0;
 
 const SOUNDS: Record<string, [number, number, number, number?][]> = {
   // [freq, start, dur, gain]
@@ -14,7 +16,9 @@ const SOUNDS: Record<string, [number, number, number, number?][]> = {
 };
 
 export function sfx(name: keyof typeof SOUNDS) {
-  if (typeof window === "undefined" || !readPrefs().sounds) return;
+  if (typeof window === "undefined") return;
+  lastSfx = performance.now();
+  if (!readPrefs().sounds) return;
   try {
     ctx ??= new AudioContext();
     if (ctx.state === "suspended") ctx.resume();

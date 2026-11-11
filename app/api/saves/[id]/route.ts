@@ -92,12 +92,12 @@ export const PUT = guard(async (req: Request, { params }: Ctx) => {
   meta.history = keep;
   await putJson(K.saveMeta(id), meta);
   await deleteKeys(dropped.flatMap((h) => [K.saveBlob(id, h.ver, "state"), K.saveBlob(id, h.ver, "sram"), K.saveBlob(id, h.ver, "shot")])).catch(() => {});
-  await touchIndex(K, id, meta, me, Number.isInteger(b.localHour) ? b.localHour : undefined);
+  await touchIndex(K, id, meta, me, Number.isInteger(b.localHour) ? b.localHour : undefined, /^\d{4}-\d{2}-\d{2}$/.test(b.localDay) ? b.localDay : undefined);
   return json({ meta });
 });
 
 /** keep library index in sync (recent ordering, play time, hero screenshot) */
-async function touchIndex(K: Keys, id: string, meta: SaveMeta, user?: User, localHour?: number) {
+async function touchIndex(K: Keys, id: string, meta: SaveMeta, user?: User, localHour?: number, localDay?: string) {
   const index = (await getJson<RomEntry[]>(K.index)) ?? [];
   const rom = index.find((r) => r.id === id);
   if (!rom) return;
@@ -110,7 +110,13 @@ async function touchIndex(K: Keys, id: string, meta: SaveMeta, user?: User, loca
     const prof = await getProfile(user).catch(() => ({} as any));
     const devices = Array.from(new Set([...(prof.devices ?? []), meta.current?.device].filter(Boolean))).slice(-12) as string[];
     const h = typeof localHour === "number" ? localHour : -1; // the player's own clock, not the server's
+    // per-day counters (the player's own calendar day): saves today, and the run of days in a row
+    const day = localDay ?? new Date().toISOString().slice(0, 10);
+    const dayN = prof.day?.d === day ? prof.day.n + 1 : 1;
+    const gap = prof.day ? Math.round((Date.parse(day) - Date.parse(prof.day.d)) / 86400000) : NaN;
+    const streak = gap === 0 ? prof.streak ?? 1 : gap === 1 ? (prof.streak ?? 1) + 1 : 1;
     await patchProfile(user, {
+      day: { d: day, n: dayN }, streak, bestStreak: Math.max(prof.bestStreak ?? 0, streak), dayMax: Math.max(prof.dayMax ?? 0, dayN),
       playSeconds: index.reduce((a, r) => a + (r.playSeconds ?? 0), 0), saves: (prof.saves ?? 0) + 1, devices,
       nightSaves: (prof.nightSaves ?? 0) + (h >= 0 && h < 4 ? 1 : 0), earlySaves: (prof.earlySaves ?? 0) + (h >= 5 && h < 8 ? 1 : 0),
     }).catch(() => {});

@@ -178,6 +178,45 @@ const ICONS: Record<string, Icon> = {
       },
     ],
   },
+  // Plugged In — an hourglass
+  hourglass: {
+    parts: [
+      {
+        d: "M18 12H46V18C46 26 38 29 38 32C38 35 46 38 46 46V52H18V46C18 38 26 35 26 32C26 29 18 26 18 18Z", fill: "#d9f3ff", shade: "#b3e1f7", sh: 2,
+        detail: <>
+          <path d="M23 20H41C40 25 35 27 32 30.5C29 27 24 25 23 20Z" fill="#ffc83d" />
+          <path d="M32 30V44" stroke="#ffc83d" strokeWidth="2.2" strokeLinecap="round" />
+          <path d="M20 53C20 46 27 43 32 41C37 43 44 46 44 53Z" fill="#ffc83d" />
+          {gloss(23, 15.5, 2.2, 1.2, -20, .9)}
+        </>,
+      },
+      { d: rr(12, 5, 40, 9, 3.5), fill: "#8a5cf6", shade: "#6a3ddd", sh: 1.6, detail: gloss(17, 8, 2, 1.1, -20, .8) },
+      { d: rr(12, 50, 40, 9, 3.5), fill: "#8a5cf6", shade: "#6a3ddd", sh: 1.6 },
+    ],
+  },
+  // On a Roll — a flame
+  flame: {
+    parts: [
+      { d: "M33 4C35 15 48 21 48 37C48 49 41 58 32 58C23 58 16 49 16 37C16 30 19 25 23 21C24 26 26 29 29 30C28 20 29 11 33 4Z", fill: "#ff7a2f", shade: "#e8501c", sh: 2.6, detail: gloss(22, 33, 1.6, 3, 18, .75) },
+      { d: "M32 31C34 37 40 39 40 46C40 52 36.5 55 32 55C27.5 55 24 52 24 46C24 41 30 38 32 31Z", fill: "#ffd23f", shade: "#ffb11f", sh: 1.6, ow: 4 },
+    ],
+  },
+  // Quick Saver — a lightning bolt
+  bolt: {
+    parts: [
+      { d: "M37 4L13 36H27L23 60L51 26H36Z", fill: "#ffd23f", shade: "#f5a81c", sh: 2.4, detail: <path d="M33 11L21 28" stroke="#fff" strokeWidth="2.6" strokeLinecap="round" opacity=".85" /> },
+    ],
+  },
+  // Completionist — a trophy
+  trophy: {
+    parts: [
+      { d: "M20 13C7 13 8 30 22 31", line: 5, fill: "#ffc83d", shade: "#eba21a" },
+      { d: "M44 13C57 13 56 30 42 31", line: 5, fill: "#ffc83d", shade: "#eba21a" },
+      { d: rr(28, 34, 8, 15, 1.5), fill: "#eba21a" },
+      { d: rr(18, 47, 28, 10, 3.5), fill: "#8a5cf6", shade: "#6a3ddd", sh: 1.6 },
+      { d: "M17 7H47V22C47 32 40 39 32 39C24 39 17 32 17 22Z", fill: "#ffc83d", shade: "#eba21a", sh: 2.6, detail: <><path d={star(32, 21, 7.5, 3.3)} fill="#fff4c4" />{gloss(21.5, 11.5, 2.4, 1.3, -20)}</> },
+    ],
+  },
   // Host — a house with a heart
   house: {
     parts: [
@@ -278,7 +317,15 @@ export function BadgeArt({ art, step, size = 64, shine = false }: { art: string;
           <animate attributeName="opacity" values="0;1;0" dur="2.6s" begin={`${d}s`} repeatCount="indefinite" />
         </path>
       ))}
-      {step === 0 && <g transform="translate(32 34)"><rect x="-8" y="-2" width="16" height="12" rx="2.5" fill="#fff" stroke="#5b626d" strokeWidth="2.4" /><path d="M-4.5 -2v-3a4.5 4.5 0 0 1 9 0v3" fill="none" stroke="#5b626d" strokeWidth="2.4" /></g>}
+      {step === 0 && (
+        <g transform="translate(32 33)">
+          <path d="M-6 -1V-6A6 6 0 0 1 6 -6V-1" fill="none" stroke="#fff" strokeWidth="7" strokeLinecap="round" />
+          <rect x="-11.5" y="-3.5" width="23" height="18" rx="5" fill="#fff" />
+          <path d="M-6 -1V-6A6 6 0 0 1 6 -6V-1" fill="none" stroke="#3b3f4a" strokeWidth="3.6" strokeLinecap="round" />
+          <rect x="-9.5" y="-1.5" width="19" height="14" rx="3.5" fill="#3b3f4a" />
+          <circle cy="4" r="2.2" fill="#fff" /><rect x="-1" y="4" width="2" height="5" rx="1" fill="#fff" />
+        </g>
+      )}
     </svg>
   );
 }

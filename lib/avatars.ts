@@ -13,9 +13,9 @@ export const AVATAR_HOSTS = [
   "https://raw.githubusercontent.com/N3evin/AmiiboAPI/",
   "https://raw.githubusercontent.com/PokeAPI/sprites/",
 ];
-export const validAvatarUrl = (u: unknown) => typeof u === "string" && u.length < 300 && AVATAR_HOSTS.some((h) => u.startsWith(h)) && !u.includes("..");
+export const validAvatarUrl = (u: unknown) => typeof u === "string" && u.length < 340 && /^[^#]+(#a=-?[\d.]+,-?[\d.]+,-?[\d.]+)?$/.test(u) && AVATAR_HOSTS.some((h) => u.startsWith(h)) && !u.includes("..");
 
-const KEY = "shared/avatar-index.json";
+const KEY = "shared/avatar-index-v2.json";
 const MONTH = 30 * 86400_000;
 let mem: AvatarIndex | null = null;
 const UA = { headers: { "User-Agent": "linkcable-rom-library" } };
@@ -36,9 +36,9 @@ export async function avatarIndex(): Promise<AvatarIndex> {
     const seen = new Set<string>();
     const amiibo: AvatarOpt[] = [];
     for (const a of am.amiibo as any[]) {
-      if (!["Figure", "Yarn", "Band"].includes(a.type) || !a.image) continue;
+      if (a.type === "Card" || !a.image) continue; // cards are pictures of cards, not of the character
       const n = String(a.name).replace(/\s*-\s*/g, " – ");
-      const k = `${a.character}|${n}`;
+      const k = a.image; // the same character from two figure lines is two different sculpts: keep both
       if (seen.has(k)) continue;
       seen.add(k);
       amiibo.push({ n, s: a.gameSeries || a.amiiboSeries || "Other", u: a.image });
@@ -46,7 +46,7 @@ export async function avatarIndex(): Promise<AvatarIndex> {
     amiibo.sort((x, y) => x.s.localeCompare(y.s) || x.n.localeCompare(y.n));
     const pokemon: AvatarOpt[] = (pk.results as { name: string; url: string }[]).map((p) => {
       const id = Number(p.url.match(/\/(\d+)\/?$/)?.[1]);
-      return { n: title(p.name), s: region(id), u: `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${id}.png`, id } as AvatarOpt & { id: number };
+      return { n: title(p.name), s: region(id), u: `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/home/${id}.png`, id } as AvatarOpt & { id: number };
     }).sort((a: any, b: any) => a.id - b.id).map(({ n, s, u }) => ({ n, s, u }));
     mem = { at: Date.now(), amiibo, pokemon };
     await putJson(KEY, mem).catch(() => {});

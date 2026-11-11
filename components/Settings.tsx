@@ -3,10 +3,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { RomView } from "../lib/games";
 import { ago, api, mb, playtime } from "../lib/client";
 import { usePrefs } from "../lib/prefs";
-import { FAMILIES, FRAMES, MAX_LEVEL, STEP_NAMES, evaluate, frameState, type Stats } from "../lib/flair";
+import { FAMILIES, FRAMES, MAX_LEVEL, STAGE_NAMES, STEP_NAMES, TOP_STAGE, evaluate, frameState, type Stats } from "../lib/flair";
 import Icon from "./Icon";
-import { Avatar } from "./Icon";
-import { Modal, Toggle, useMe, type Push } from "./Shell";
+import { Avatar, parseAvatar } from "./Icon";
+import { Modal, Toggle, patchMe, useMe, type Push } from "./Shell";
+import { sampleAvatarColor } from "../lib/artColor";
 import { EquippedBadge, FlairAvatar } from "./Flair";
 import { FramedAvatar } from "./Frame";
 import { BadgeArt } from "./BadgeArt";
@@ -33,7 +34,7 @@ export default function Settings({ roms, timeline, section = "profile", onBack, 
   const SECTIONS = [
     { id: "profile", icon: "user", label: "Profile" },
     { id: "security", icon: "shield", label: "Security" },
-    { id: "appearance", icon: "sun", label: "Appearance" },
+    { id: "appearance", icon: "moon", label: "Appearance" },
     { id: "sound", icon: "sound", label: "Sound" },
     { id: "system", icon: "clock", label: "System" },
     { id: "storage", icon: "disk", label: "Storage" },
@@ -49,14 +50,16 @@ export default function Settings({ roms, timeline, section = "profile", onBack, 
         <h1>Settings</h1>
       </div>
       <div className="settings-grid">
-        <nav className="settings-nav">
+        {/* two zones: ↑/↓ stay in the list or in the open page; → enters the page, ← on its left edge returns to the list */}
+        <nav className="settings-nav" data-nav-zone data-nav-exit-right=".settings-body [data-nav]" data-nav-exit-up=".topbar [data-nav]">
           {SECTIONS.map((s) => (
-            <button key={s.id} data-nav data-sec={s.id} className={`snav ${sec === s.id ? "on" : ""}`} onFocus={() => setSec(s.id)} onClick={() => setSec(s.id)}>
+            <button key={s.id} data-nav data-nohover data-sec={s.id} className={`snav ${sec === s.id ? "on" : ""}`} onFocus={() => setSec(s.id)}
+              onClick={(e) => { setSec(s.id); if (e.detail === 0) setTimeout(() => focusFirst(".settings-body [data-nav]"), 40); /* Enter / A steps into the page */ }}>
               <Icon name={s.icon} size={24} />{s.label}
             </button>
           ))}
         </nav>
-        <div className="settings-body" key={sec}>
+        <div className="settings-body" key={sec} data-nav-zone data-nav-exit-left=".snav.on">
           {sec === "profile" && <ProfileSection me={me} roms={roms} onPicture={() => setPicker(true)} refresh={refreshMe} toast={toast} />}
           {sec === "security" && <SecuritySection me={me} toast={toast} />}
           {sec === "appearance" && (<>
@@ -106,31 +109,36 @@ export default function Settings({ roms, timeline, section = "profile", onBack, 
 }
 
 // ---------------------------------------------------------------- Profile
-function ProfileSection({ me, roms, onPicture, refresh, toast }: { me: ReturnType<typeof useMe>; roms: RomView[]; onPicture: () => void; refresh: () => void; toast: Push }) {
+function ProfileSection({ me, roms, onPicture, toast }: { me: ReturnType<typeof useMe>; roms: RomView[]; onPicture: () => void; refresh: () => void; toast: Push }) {
   const [name, setName] = useState("");
   useEffect(() => { if (me) setName(me.name); }, [me?.name]); // eslint-disable-line
   const played = roms.reduce((a, r) => a + (r.playSeconds ?? 0), 0);
   const saveName = async () => {
     if (!name.trim() || name.trim() === me?.name) return;
-    try { await api("/api/account", { method: "PATCH", body: JSON.stringify({ name }) }); refresh(); sfx("saved"); toast({ title: "Name updated" }, 1800); }
+    try { await patchMe({ name: name.trim() }); sfx("saved"); toast({ title: "Name updated" }, 1800); }
     catch (e: any) { sfx("error"); toast({ title: "Couldn't rename", text: e.message, error: true }); }
   };
+  const fail = (e: any) => { sfx("error"); toast({ title: "Couldn't save colour", text: e.message, error: true }); };
+  const setColor = (c: string) => { sfx("tab"); patchMe({ color: c, colorAuto: false }).catch(fail); };
+  const setAuto = async () => {
+    sfx("tab");
+    const c = me?.avatar ? await sampleAvatarColor(parseAvatar(me.avatar).url) : null;
+    patchMe({ color: c ?? me?.color ?? COLORS[0], colorAuto: true }).catch(fail);
+  };
+  const custom = !!me && !me.colorAuto && !COLORS.includes(me.color);
+  const picker = useRef<HTMLInputElement>(null), debounce = useRef<any>(null);
   return (<>
     <h2>Profile</h2>
     <div className="profile-card">
       <button data-nav className="avatar-btn big" onClick={onPicture} aria-label="Change profile picture">
-        <FlairAvatar name={me?.name} color={me?.color} src={me?.avatar} size={112} flair={me?.profile?.flair} />
+        <FlairAvatar self name={me?.name} color={me?.color} src={me?.avatar} size={112} flair={me?.profile?.flair} />
         <span className="avatar-edit"><Icon name="pencil" size={18} /></span>
       </button>
       <div className="profile-meta">
-        <strong>{me?.name} <EquippedBadge flair={me?.profile?.flair} size={34} /></strong>
+        <strong>{me?.name} <EquippedBadge self flair={me?.profile?.flair} size={34} /></strong>
         <span>{me?.owner ? "Owner" : "Member"}{me?.createdAt ? ` · since ${new Date(me.createdAt).toLocaleDateString("en", { month: "long", year: "numeric" })}` : ""}</span>
         <span className="profile-stats"><b>{roms.length}</b> games <i /> <b>{playtime(played)}</b> hours played</span>
       </div>
-    </div>
-    <div className="row tall">
-      <span><b>Profile picture</b><small>Any Nintendo character or Pokémon</small></span>
-      <button data-nav className="btn" onClick={onPicture}><Icon name="image" size={20} />Change</button>
     </div>
     <div className="row tall">
       <span><b>Display name</b><small>Shown on the “Who's playing?” screen</small></span>
@@ -140,10 +148,15 @@ function ProfileSection({ me, roms, onPicture, refresh, toast }: { me: ReturnTyp
       </span>
     </div>
     <div className="row tall">
-      <span><b>Colour</b><small>Behind your picture and initial</small></span>
-      <span className="swatches">
-        {COLORS.map((c) => <button key={c} data-nav aria-label={`Colour ${c}`} className={`swatch ${me?.color === c ? "on" : ""}`} style={{ background: c }}
-          onClick={async () => { await api("/api/account", { method: "PATCH", body: JSON.stringify({ color: c }) }); refresh(); sfx("tab"); }} />)}
+      <span><b>Colour</b><small>{me?.colorAuto ? "Automatic: taken from your picture" : "Behind your picture and initial"}</small></span>
+      <span className="swatches" data-nav-row>
+        <button data-nav aria-label="Automatic colour" title="Automatic: match my picture" className={`swatch auto ${me?.colorAuto ? "on" : ""}`} onClick={setAuto}><Icon name="auto" size={20} /></button>
+        {COLORS.map((c) => <button key={c} data-nav aria-label={`Colour ${c}`} className={`swatch ${!me?.colorAuto && me?.color === c ? "on" : ""}`} style={{ background: c }} onClick={() => setColor(c)} />)}
+        <button data-nav aria-label="Custom colour" title="Pick any colour" className={`swatch custom ${custom ? "on" : ""}`} style={custom ? { background: me!.color } : undefined} onClick={() => picker.current?.click()}>
+          {!custom && <Icon name="plus" size={18} stroke={2.6} />}
+          <input ref={picker} type="color" tabIndex={-1} value={me?.color ?? "#3a8dff"} onClick={(e) => e.stopPropagation()}
+            onChange={(e) => { const c = e.target.value; clearTimeout(debounce.current); debounce.current = setTimeout(() => patchMe({ color: c, colorAuto: false }).catch(fail), 250); }} />
+        </button>
       </span>
     </div>
   </>);
@@ -248,7 +261,7 @@ function StorageSection({ roms, onChanged, toast }: { roms: RomView[]; onChanged
     <div className="row tall"><span><b>Games</b><small>Stored in your private space in the bucket</small></span><span>{roms.length} · {mb(roms.reduce((a, r) => a + r.size, 0))}</span></div>
     <div className="row tall"><span><b>Total play time</b></span><span>{playtime(roms.reduce((a, r) => a + (r.playSeconds ?? 0), 0))} hrs</span></div>
     <div className="row tall"><span><b>Cover art</b><small>{missing.length ? `${missing.length} game${missing.length > 1 ? "s" : ""} without a cover` : "Every game has a cover"} · libretro-thumbnails box art</small></span>
-      <button data-nav className="btn" disabled={!missing.length || !!run} onClick={fetchCovers}><Icon name="wand" size={20} />{run ? "Searching…" : "Find missing covers"}</button></div>
+      <button data-nav className="btn" disabled={!missing.length || !!run} onClick={fetchCovers}><Icon name="image" size={20} />{run ? "Searching…" : "Find missing covers"}</button></div>
     <div className="row tall"><span><b>Downloaded ROM cache</b><small>ROMs cached on this device so they only download once</small></span>
       <button data-nav className="btn" onClick={async () => { await caches.delete("linkcable-roms"); sfx("back"); toast({ title: "Cache cleared" }, 1500); }}>Clear cache</button></div>
     {me?.owner && <div className="row tall"><span><b>Upload permissions</b><small>Writes the bucket's CORS rule for this site's address. Run once after setting up storage.</small></span>
@@ -257,103 +270,126 @@ function StorageSection({ roms, onChanged, toast }: { roms: RomView[]; onChanged
 }
 
 // ---------------------------------------------------------------- Labs (PTR)
-function LabsSection({ me, roms, timeline, refresh }: { me: ReturnType<typeof useMe>; roms: RomView[]; timeline: TimelineItem[]; refresh: () => void }) {
+function LabsSection({ me, roms, timeline }: { me: ReturnType<typeof useMe>; roms: RomView[]; timeline: TimelineItem[]; refresh: () => void }) {
   const [prefs, update] = usePrefs();
   const [users, setUsers] = useState(1);
-  const [previewSt, setPreviewSt] = useState<{ tier: (typeof FRAMES)[number]; stage: number; max: boolean } | null>(null);
-  const setPreview = (v: null | { tier: (typeof FRAMES)[number]; stage: number; max: boolean }) => setPreviewSt(v);
+  type Show = { tier: (typeof FRAMES)[number]; stage: number; max: boolean } | null;
+  const [preview, setPreview] = useState<Show>(null);
   useEffect(() => { fetch("/api/users").then((r) => r.json()).then((d) => setUsers(d.users?.length ?? 1)).catch(() => {}); }, []);
   const prof = me?.profile ?? {};
   const stats: Stats = useMemo(() => ({
     games: roms, saves: Math.max(prof.saves ?? 0, timeline.length), nightSaves: prof.nightSaves ?? 0, earlySaves: prof.earlySaves ?? 0,
     devices: Math.max(prof.devices?.length ?? 0, new Set(timeline.map((t) => t.device)).size),
     accountDays: me?.createdAt ? Math.floor((Date.now() - me.createdAt) / 86400000) : 0, users, owner: !!me?.owner,
-  }), [roms, timeline, prof.saves, prof.nightSaves, prof.earlySaves, prof.devices, me?.createdAt, me?.owner, users]);
-  const ev = useMemo(() => evaluate(stats), [stats]);
+    linkSeconds: prof.linkSeconds ?? 0, bestStreak: prof.bestStreak ?? 0, dayMaxSaves: prof.dayMax ?? 0,
+  }), [roms, timeline, prof.saves, prof.nightSaves, prof.earlySaves, prof.devices, prof.linkSeconds, prof.bestStreak, prof.dayMax, me?.createdAt, me?.owner, users]);
+  const real = useMemo(() => evaluate(stats), [stats]);
+  // Test mode: pretend to be any level / own every badge. Local to this browser, never published, gone when switched off.
+  const testing = prefs.devLevel != null || prefs.devAll;
+  const ev = useMemo(() => (prefs.devAll ? { ...evaluate(stats, { all: true }), level: real.level, into: real.into, need: real.need, progress: real.progress } : real), [prefs.devAll, stats, real]);
+  const level = prefs.devLevel ?? real.level;
   const snap = prof.flair;
   const frameChoice = snap?.frame ?? "auto";
-  const st = frameState(ev.level);
-  const equipped = snap?.badge ?? null;
+  const st = frameState(level);
+  const equipped = testing ? prefs.devBadge ?? snap?.badge ?? null : snap?.badge ?? null;
 
   // keep the published snapshot (what others see) in sync with your real progress
   const publish = async (patch: { frame?: string; badge?: { id: string; step: number } | null }) => {
-    const flair = { level: ev.level, frame: patch.frame ?? frameChoice, badge: patch.badge !== undefined ? patch.badge : equipped };
-    await api("/api/account", { method: "PATCH", body: JSON.stringify({ flair }) }); refresh();
+    if (testing && patch.badge !== undefined) { update({ devBadge: patch.badge }); return; }
+    const flair = { level: real.level, frame: patch.frame ?? frameChoice, badge: patch.badge !== undefined ? patch.badge : snap?.badge ?? null };
+    await patchMe({}, { flair });
   };
   useEffect(() => {
     if (!me || !prefs.ptrFlair) return;
-    const eqStep = equipped ? ev.earned.find((e) => e.family.id === equipped.id)?.step ?? 0 : 0;
-    if (snap?.level !== ev.level || (equipped && eqStep !== equipped.step)) publish({ badge: equipped && eqStep ? { id: equipped.id, step: eqStep } : null });
+    const eq = snap?.badge, eqStep = eq ? real.earned.find((e) => e.family.id === eq.id)?.step ?? 0 : 0;
+    if (snap?.level !== real.level || (eq && eqStep !== eq.step)) publish({ badge: eq && eqStep ? { id: eq.id, step: eqStep } : null });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ev.level, prefs.ptrFlair, me?.id]);
+  }, [real.level, prefs.ptrFlair, me?.id]);
 
   // what the big preview shows: hovered gallery item, else your current frame
-  type Show = { tier: (typeof FRAMES)[number]; stage: number; max: boolean } | null;
   const own: Show = frameChoice === "none" ? null : (() => {
     const pick = FRAMES.findIndex((f) => f.id === frameChoice);
-    return pick >= 0 && pick < st.index ? { tier: FRAMES[pick], stage: 4, max: false } : { tier: st.tier, stage: st.stage, max: st.max };
+    return pick >= 0 && pick < st.index ? { tier: FRAMES[pick], stage: TOP_STAGE, max: false } : { tier: st.tier, stage: st.stage, max: st.max };
   })();
-  const preview = previewSt;
   const show: Show = preview ?? own;
   const nextTier = FRAMES[st.index + 1];
 
   return (<>
     <h2>Labs <span className="pill accent">PTR</span></h2>
-    <p className="lead small">Experimental. Only visible in browsers where it's switched on.</p>
+    <p className="lead small">Features still being tested: profile frames that grow with your level, and badges for achievements.</p>
     <div className="row tall"><span><b>Profile frames &amp; badges</b><small>Level up from play time and achievements; frames change material as you climb. Equip one badge.</small></span>
       <Toggle label="Profile flair" on={prefs.ptrFlair} onChange={(v) => update({ ptrFlair: v })} /></div>
 
     {prefs.ptrFlair && (<>
-      <div className="row tall"><span><b>Minimal frames</b><small>A thin ring with only the rotating shine: no gems, laurels or level plate.</small></span>
+      <div className="row tall"><span><b>Minimal frames</b><small>A thin ring with only the shine: no gems, wreath or level plate.</small></span>
         <Toggle label="Minimal frames" on={prefs.ptrMinimal} onChange={(v) => update({ ptrMinimal: v })} /></div>
+
+      {/* ---- test mode ---- */}
+      <div className={`row tall col testrow ${testing ? "on" : ""}`}>
+        <div className="testrow-head">
+          <span><b>Test mode</b><small>Try any level and every badge on your own account. Only you see it, and switching it off restores your real progress.</small></span>
+          <Toggle label="Test mode" on={testing} onChange={(v) => update(v ? { devLevel: real.level, devAll: true } : { devLevel: null, devAll: false, devBadge: null })} />
+        </div>
+        {testing && (
+          <div className="testrow-controls" data-nav-row>
+            <b className="test-level">Lv {level}</b>
+            <input data-nav type="range" min={0} max={MAX_LEVEL} value={level} aria-label="Preview level"
+              onChange={(e) => update({ devLevel: +e.target.value })}
+              onKeyDown={(e) => { if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); update({ devLevel: Math.max(0, Math.min(MAX_LEVEL, level + (e.key === "ArrowRight" ? 1 : -1) * (e.shiftKey ? 25 : 1))) }); } }} />
+            {[-25, -1, 1, 25].map((d) => <button key={d} data-nav className="btn small" onClick={() => update({ devLevel: Math.max(0, Math.min(MAX_LEVEL, level + d)) })}>{d > 0 ? `+${d}` : d}</button>)}
+            <button data-nav className="btn small" onClick={() => update({ devLevel: MAX_LEVEL })}>999</button>
+            <label className="test-all"><Toggle label="All badges" on={prefs.devAll} onChange={(v) => update({ devAll: v, devLevel: prefs.devLevel ?? real.level })} />All badges</label>
+          </div>
+        )}
+      </div>
+
       {/* ---- rank card ---- */}
       <div className={`rank-card m-${(show ?? own)?.tier.material ?? "plastic"}`}>
         <div className="rank-stage">
-          <FramedAvatar tier={show?.tier ?? null} stage={show?.stage} max={show?.max} level={preview ? (preview.max ? MAX_LEVEL : preview.tier.level) : ev.level} name={me?.name} color={me?.color} src={me?.avatar} size={120} minimal={prefs.ptrMinimal} />
+          <FramedAvatar tier={show?.tier ?? null} stage={show?.stage} max={show?.max} level={preview ? (preview.max ? MAX_LEVEL : preview.tier.level) : level} name={me?.name} color={me?.color} src={me?.avatar} size={120} minimal={prefs.ptrMinimal} />
         </div>
         <div className="rank-info">
-          <span className="rank-eyebrow">{preview ? "Preview" : "Your frame"}</span>
-          <strong className="rank-name">{show ? <>{show.tier.name}{(show.max || show.stage > 0) && <span className="rank-pill">{show.max ? "♛ Crowned" : ["", "●", "●●", "●●●", "★"][show.stage]}</span>}</> : "No frame"}<EquippedBadge flair={snap} size={36} /></strong>
+          <span className="rank-eyebrow">{preview ? "Preview" : testing ? "Test mode" : "Your frame"}</span>
+          <strong className="rank-name">{show ? <>{show.tier.name}{(show.max || show.stage > 0) && <span className="rank-pill">{show.max ? "♛ Crowned" : STAGE_NAMES[show.stage]}</span>}</> : "No frame"}<EquippedBadge flair={{ level, badge: equipped }} size={36} /></strong>
           <span className="rank-blurb">{show?.tier.blurb}</span>
           <div className="xp">
-            <div className="xp-top"><b>Level {ev.level}</b><span>{ev.level >= MAX_LEVEL ? "Max level" : `${ev.into.toLocaleString()} / ${ev.need.toLocaleString()} XP`}</span></div>
-            <div className="xp-bar"><i style={{ width: `${Math.round(ev.progress * 100)}%` }} /></div>
-            <small>{ev.playXp.toLocaleString()} XP from play time · {ev.achXp.toLocaleString()} XP from achievements
-              {st.max ? "" : st.stage < 4 ? ` · next stud at Lv ${st.nextStageAt}` : nextTier ? ` · ${nextTier.name} at Lv ${nextTier.level}` : ""}</small>
+            <div className="xp-top"><b>Level {level}</b><span>{testing ? `Really Lv ${real.level}` : level >= MAX_LEVEL ? "Max level" : `${ev.into.toLocaleString()} / ${ev.need.toLocaleString()} XP`}</span></div>
+            <div className="xp-bar"><i style={{ width: `${Math.round((testing ? level / MAX_LEVEL : ev.progress) * 100)}%` }} /></div>
+            <small>{real.playXp.toLocaleString()} XP from play time · {real.achXp.toLocaleString()} XP from achievements
+              {st.max ? "" : st.stage < TOP_STAGE ? ` · next stage at Lv ${st.nextStageAt}` : nextTier ? ` · ${nextTier.name} at Lv ${nextTier.level}` : ""}</small>
           </div>
-          {/* stage track for the current tier: plain · ● · ●● · ●●● · ★ */}
           {st.index > 0 && <div className="stage-track">
-            {[0, 1, 2, 3, 4].map((k) => (
-              <span key={k} className={`stage-pip ${k <= st.stage ? "on" : ""} ${k === st.stage ? "cur" : ""}`}>{k === 0 ? "○" : k === 4 ? "★" : "●".repeat(k)}</span>
-            ))}
+            {STAGE_NAMES.map((n, k) => <span key={k} className={`stage-pip ${k <= st.stage ? "on" : ""} ${k === st.stage ? "cur" : ""}`}>{n}</span>)}
             <span className="stage-label">{st.tier.name} {st.tier.level}–{(nextTier?.level ?? MAX_LEVEL + 1) - 1}</span>
           </div>}
         </div>
       </div>
 
       {/* ---- frame gallery ---- */}
-      <h3 className="subhead">Frames <span className="dim">· each tier: plain → ● → ●● → ●●● → ★, then the next material</span></h3>
+      <h3 className="subhead">Frames</h3>
       <div className="frame-gallery">
         {FRAMES.map((f, i) => {
           const earned = i <= st.index, on = frameChoice === f.id || (frameChoice === "auto" && i === st.index);
-          const pv = { tier: f, stage: i < st.index ? 4 : i === st.index ? st.stage : 4, max: false };
+          const pv = { tier: f, stage: i === st.index ? st.stage : TOP_STAGE, max: false };
           return (
             <button key={f.id} data-nav className={`frame-opt ${on ? "on" : ""} ${earned ? "" : "locked"}`}
               onMouseEnter={() => setPreview(pv)} onMouseLeave={() => setPreview(null)} onFocus={() => setPreview(pv)} onBlur={() => setPreview(null)}
-              onClick={() => earned && publish({ frame: f.id }).then(() => sfx("saved"))}>
+              onClick={() => (earned && !testing ? publish({ frame: f.id }).then(() => sfx("saved")) : sfx("error"))}>
               <FramedAvatar tier={f} stage={pv.stage} name={me?.name} color={me?.color} src={me?.avatar} size={50} showLevel={false} minimal={prefs.ptrMinimal} />
               <b>{f.name}</b>
               <small>{earned ? (on ? "Equipped" : "Unlocked") : `Lv ${f.level}`}</small>
+              {!earned && <span className="opt-lock"><Icon name="lock" size={14} stroke={2.4} /></span>}
             </button>
           );
         })}
-        <button data-nav className="frame-opt locked crowned" onMouseEnter={() => setPreview({ tier: FRAMES[FRAMES.length - 1], stage: 4, max: true })} onMouseLeave={() => setPreview(null)}
-          onFocus={() => setPreview({ tier: FRAMES[FRAMES.length - 1], stage: 4, max: true })} onBlur={() => setPreview(null)}>
-          <FramedAvatar tier={FRAMES[FRAMES.length - 1]} stage={4} max name={me?.name} color={me?.color} src={me?.avatar} size={50} showLevel={false} minimal={prefs.ptrMinimal} />
+        <button data-nav className={`frame-opt crowned ${st.max ? "on" : "locked"}`} onMouseEnter={() => setPreview({ tier: FRAMES[FRAMES.length - 1], stage: TOP_STAGE, max: true })} onMouseLeave={() => setPreview(null)}
+          onFocus={() => setPreview({ tier: FRAMES[FRAMES.length - 1], stage: TOP_STAGE, max: true })} onBlur={() => setPreview(null)}>
+          <FramedAvatar tier={FRAMES[FRAMES.length - 1]} stage={TOP_STAGE} max name={me?.name} color={me?.color} src={me?.avatar} size={50} showLevel={false} minimal={prefs.ptrMinimal} />
           <b>Crowned</b><small>Lv {MAX_LEVEL}</small>
+          {!st.max && <span className="opt-lock"><Icon name="lock" size={14} stroke={2.4} /></span>}
         </button>
         <button data-nav className={`frame-opt ${frameChoice === "auto" ? "on" : ""}`} onClick={() => publish({ frame: "auto" }).then(() => sfx("tab"))}>
-          <span className="frame-auto"><Icon name="wand" size={26} /></span><b>Auto</b><small>Always your best</small>
+          <span className="frame-auto"><Icon name="auto" size={28} /></span><b>Auto</b><small>Always your best</small>
         </button>
         <button data-nav className={`frame-opt ${frameChoice === "none" ? "on" : ""}`} onClick={() => publish({ frame: "none" }).then(() => sfx("tab"))}>
           <span className="frame-auto"><Icon name="close" size={24} /></span><b>None</b><small>Plain picture</small>
@@ -361,7 +397,7 @@ function LabsSection({ me, roms, timeline, refresh }: { me: ReturnType<typeof us
       </div>
 
       {/* ---- badge cabinet ---- */}
-      <h3 className="subhead">Badges <span className="dim">· equip one, it shows next to your name</span></h3>
+      <h3 className="subhead">Badges</h3>
       <div className="cabinet">
         {ev.earned.map(({ family: f, step, value, next }) => {
           const on = equipped?.id === f.id;
@@ -383,9 +419,8 @@ function LabsSection({ me, roms, timeline, refresh }: { me: ReturnType<typeof us
           );
         })}
       </div>
-      <p className="hint-text">Ideas for later: seasonal frames, prestige after Lv 100, per-game mastery badges, frame unlock animation.</p>
     </>)}
-    <div className="row tall"><span><b>Turn off Labs</b><small>Hides this section again (your progress and picks are kept)</small></span>
-      <button data-nav className="btn" onClick={() => update({ labs: false, ptrFlair: false })}>Hide Labs</button></div>
+    <div className="row tall"><span><b>Turn off Labs</b><small>Hides this section again. Your real progress and picks are kept; test mode is switched off.</small></span>
+      <button data-nav className="btn" onClick={() => update({ labs: false, ptrFlair: false, devLevel: null, devAll: false, devBadge: null })}>Hide Labs</button></div>
   </>);
 }

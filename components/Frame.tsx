@@ -1,7 +1,7 @@
 "use client";
 import { useId } from "react";
 import { Avatar } from "./Icon";
-import { FRAMES, type FrameTier } from "../lib/flair";
+import { FRAMES, TOP_STAGE, type FrameTier } from "../lib/flair";
 
 /*
  * Profile frames, drawn in SVG. Units: avatar radius 30 · band 31–39.
@@ -53,13 +53,19 @@ export function FramedAvatar({ tier, stage = 0, max = false, level, name, color,
   const glint = motion === "glint";
   // band geometry: full frame vs the thin minimal ring
   const R = minimal ? 32.4 : 35, BW = minimal ? 3.4 : 8, LW = minimal ? 4.6 : 9.4;
-  const sparkle = !compact && (max || ti0 >= FRAMES.findIndex((f) => f.id === "holo"));
-  // gems sit strictly on the compass points of the ring: N · W+E · W+N+E · W+E with the star at N
-  const studs = stage === 1 ? [0] : stage === 2 ? [270, 90] : stage === 3 ? [270, 0, 90] : stage >= 4 ? [270, 90] : [];
-  const showStar = stage >= 4 && !max && !compact;
+  const hi = ti0 >= FRAMES.findIndex((f) => f.id === "diamond"); // diamond · holo · prism
+  const sparkle = !compact && (max || hi);
+  // gems sit on the compass points of the ring: N · W+E · W+N+E · then a wreath · N becomes a star · all three become stars
+  const stage_ = Math.min(stage, TOP_STAGE);
+  const studs = stage_ === 1 ? [0] : stage_ === 2 ? [270, 90] : stage_ === 3 || stage_ === 4 ? [270, 0, 90] : stage_ === 5 ? [270, 90] : [];
+  const stars = compact ? [] : stage_ === 5 ? [0] : stage_ >= 6 ? [270, 0, 90] : [];
+  const laurel = !compact && stage_ >= 4;
+  // the reflection is a CSS overlay masked to the band (see .frame-shine): cheap to animate, covers the whole border
+  const rIn = ((R - BW / 2) / box) * 100, rOut = ((R + BW / 2) / box) * 100;
+  const shine = minimal || ti0 > 0;
 
   return (
-    <span className={`frame m-${tier.material} ${compact ? "compact" : ""}`} style={{ width: W, height: W }}>
+    <span className={`frame m-${tier.material} ${compact ? "compact" : ""} ${max ? "max" : ""}`} style={{ width: W, height: W, ["--ring" as any]: `${((1 - (R + LW / 2) / box) / 2) * 100}%` }}>
       <span className="frame-avatar"><Avatar name={name} color={color} src={src} size={size} /></span>
       <svg className="frame-svg" viewBox={`${-box} ${-box} ${box * 2} ${box * 2}`} aria-hidden>
         <defs>
@@ -80,7 +86,7 @@ export function FramedAvatar({ tier, stage = 0, max = false, level, name, color,
         </defs>
 
         {/* ---------- laurel (behind) ---------- */}
-        {ex.includes("laurel") && [1, -1].map((side) => (
+        {laurel && [1, -1].map((side) => (
           <g key={side} transform={side < 0 ? "scale(-1 1)" : undefined} filter={u("drop")}>
             <path d={arc(43.2, 106, 174)} fill="none" stroke={m.lip} strokeWidth="1.5" strokeLinecap="round" />
             <path d={arc(43.2, 106, 174)} fill="none" stroke={m.leaf[0]} strokeWidth=".6" strokeLinecap="round" />
@@ -105,16 +111,6 @@ export function FramedAvatar({ tier, stage = 0, max = false, level, name, color,
           {/* soft key light (top-left) and core shadow (bottom-right) */}
           <path d={arc(R + 1, 200, 330)} stroke="#fff" strokeWidth={BW * .62} opacity=".5" fill="none" strokeLinecap="round" filter={u("blur")} />
           <path d={arc(R - 1, 25, 155)} stroke="#000" strokeWidth={BW * .75} opacity=".16" fill="none" strokeLinecap="round" filter={u("blur")} />
-          {/* travelling highlight: feathered, built from fading slivers so it never reads as a bar */}
-          {motion !== "none" && (
-            <g style={{ mixBlendMode: "screen" }}>
-              {Array.from({ length: 9 }, (_, k) => {
-                const o = Math.sin(((k + .5) / 9) * Math.PI);
-                return <path key={k} d={arc(R, k * 2.6, k * 2.6 + 3.2)} stroke="#fff" strokeWidth={BW * (.5 + o * .32)} opacity={(o * o * .75).toFixed(3)} fill="none" filter={u("blur")} />;
-              })}
-              <animateTransform attributeName="transform" type="rotate" values={glint ? "-30;330;330" : "-30;330"} keyTimes={glint ? "0;.35;1" : "0;1"} dur={glint ? "7s" : motion === "prism" ? "3.6s" : "5s"} repeatCount="indefinite" />
-            </g>
-          )}
         </g>
         {!minimal && (<>
           <circle r="38.9" fill="none" stroke={m.lip} strokeWidth=".9" />
@@ -152,8 +148,8 @@ export function FramedAvatar({ tier, stage = 0, max = false, level, name, color,
         {/* ---------- progression studs ---------- */}
         {!compact && studs.map((d) => <Stud key={d} deg={d} cut={tier.gem} m={m} u={u} />)}
         {compact && !minimal && stage > 0 && <Stud deg={0} cut={tier.gem} m={m} u={u} small />}
-        {showStar && (
-          <g transform="translate(0 -36.6)" filter={u("drop")}>
+        {!max && stars.map((d) => { const [sx, sy] = P(36.6, d), k = d === 0 ? 1 : .86; return (
+          <g key={d} transform={`translate(${f2(sx)} ${f2(sy)}) scale(${k})`} filter={u("drop")}>
             <path d={star(0, 0, 10, 4.5, 5)} fill={u("metal")} stroke={m.lip} strokeWidth=".8" strokeLinejoin="round" />
             {Array.from({ length: 5 }, (_, k) => {
               const a = (Math.PI * 2 / 5) * k - Math.PI / 2, b = a + Math.PI / 5;
@@ -162,7 +158,8 @@ export function FramedAvatar({ tier, stage = 0, max = false, level, name, color,
             <circle r="2.9" fill={u("gem")} stroke={m.lip} strokeWidth=".45" />
             <ellipse cx="-.9" cy="-1" rx="1" ry=".6" transform="rotate(-35 -.9 -1)" fill="#fff" opacity=".95" />
           </g>
-        )}
+        ); })}
+        {max && !compact && [270, 90].map((d) => <Stud key={"m" + d} deg={d} cut={tier.gem} m={m} u={u} />)}
 
         {/* ---------- Lv 999: crown + fading sparkles ---------- */}
         {max && !compact && (<>
@@ -176,17 +173,17 @@ export function FramedAvatar({ tier, stage = 0, max = false, level, name, color,
             {[[-14, -5.5], [0, -10.5], [14, -5.5]].map(([x, y], k) => <g key={k}><circle cx={x} cy={y} r="1.85" fill={u("gem")} stroke={m.lip} strokeWidth=".5" /><circle cx={x - .55} cy={y - .6} r=".55" fill="#fff" /></g>)}
           </g>
         </>)}
-        {sparkle && (<>
-          {[[-47, -18, 0], [49, -28, .9], [45, 26, 1.8], [-42, 34, 2.7], [26, -50, 3.6], [-28, -47, 4.5]].map(([x, y, d], i) => (
-            <path key={i} d={star(x, y, 4.2, .9, 4)} fill="#fff" stroke={m.gem[1]} strokeWidth=".55" opacity="0">
-              <animate attributeName="opacity" values="0;1;0" keyTimes="0;.5;1" dur="3.6s" begin={`${d * .8}s`} repeatCount="indefinite" calcMode="spline" keySplines=".4 0 .6 1;.4 0 .6 1" />
+        {sparkle && ([[-47, -18, 5.2, 3.4, 0], [49, -29, 2.6, 2.3, .7], [45, 27, 4, 4.1, 1.9], [-43, 33, 2.2, 2.7, 2.6], [27, -50, 3.2, 3.1, 3.3], [-29, -48, 1.8, 2.1, 1.2], [52, -3, 1.6, 2.9, 4.1], [-51, 8, 3, 3.8, .3], [14, 53, 2, 2.5, 2.2]] as const)
+          .slice(0, max ? 9 : ti0 >= FRAMES.length - 1 ? 8 : ti0 >= FRAMES.length - 2 ? 7 : 5).map(([x, y, r, dur, d], i) => (
+            <path key={i} d={star(x, y, r, r * .2, 4)} fill="#fff" stroke={m.gem[1]} strokeWidth={Math.max(.3, r * .12)} opacity="0">
+              <animate attributeName="opacity" values={`0;${r > 3 ? 1 : .8};0;0`} keyTimes="0;.3;.6;1" dur={`${dur}s`} begin={`${d}s`} repeatCount="indefinite" calcMode="spline" keySplines=".4 0 .6 1;.4 0 .6 1;0 0 1 1" />
             </path>
           ))}
-        </>)}
 
         {/* ---------- level plaque ---------- */}
-        {showLevel && !compact && level !== undefined && <Plaque level={level} ti={ti} m={m} u={u} ribbon={tier.extras.includes("laurel")} />}
+        {showLevel && !compact && level !== undefined && <Plaque level={level} ti={ti} m={m} u={u} ribbon={ti >= 3} />}
       </svg>
+      {shine && <span className={`frame-shine ${hi ? "fast" : ""}`} style={{ ["--ri" as any]: `${rIn.toFixed(2)}%`, ["--ro" as any]: `${rOut.toFixed(2)}%` }} aria-hidden><i /></span>}
     </span>
   );
 }

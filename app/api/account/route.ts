@@ -3,12 +3,14 @@ import { COOKIE, cookieOpts, createSession } from "../../../lib/auth";
 import { checkPassword, deleteUser, getProfile, patchProfile, requireUser, toPublic, updateUser } from "../../../lib/users";
 import { FAMILIES, FRAMES } from "../../../lib/flair";
 import { bad, guard, json } from "../../../lib/http";
+import { linkSecondsOf } from "../../../lib/presence";
 
 export const dynamic = "force-dynamic";
 
 export const GET = guard(async () => {
   const me = await requireUser();
-  return json({ user: toPublic(me), profile: await getProfile(me), createdAt: me.createdAt });
+  const [profile, linkSeconds] = await Promise.all([getProfile(me), linkSecondsOf(me.id)]);
+  return json({ user: toPublic(me), profile: { ...profile, linkSeconds }, createdAt: me.createdAt });
 });
 
 /** Profile + security changes. Changing the password needs the current one and signs out other devices. */
@@ -20,7 +22,7 @@ export const PATCH = guard(async (req: Request) => {
   }
   const revoke = b.password !== undefined;
   const u = await updateUser(me.id, {
-    name: b.name, color: b.color, avatar: b.avatar, password: b.password,
+    name: b.name, color: b.color, avatar: b.avatar, password: b.password, colorAuto: b.colorAuto,
     revokedBefore: revoke ? Math.floor(Date.now() / 1000) : undefined,
   });
   if (revoke) { // keep this device signed in with a fresh session

@@ -17,7 +17,7 @@
 export type GemCut = "button" | "round" | "cushion" | "emerald" | "oval" | "hex" | "brilliant" | "marquise" | "kite";
 export type FrameTier = {
   id: string; name: string; level: number; material: string; blurb: string;
-  extras: ("shell" | "ticks" | "beads" | "laurel" | "foil" | "facets")[];
+  extras: ("shell" | "ticks" | "beads" | "foil" | "facets")[];
   motion: "none" | "glint" | "sweep" | "holo" | "prism";
   /** shape of the progression gems on this tier */
   gem: GemCut;
@@ -28,15 +28,17 @@ export const FRAMES: FrameTier[] = [
   { id: "plastic", name: "Cartridge", level: 0, material: "plastic", blurb: "Hard grey shell, like the cart itself", extras: ["shell"], motion: "none", gem: "button" },
   { id: "bronze", name: "Bronze", level: 11, material: "bronze", blurb: "Warm bronze with turquoise, engraved", extras: ["ticks"], motion: "glint", gem: "round" },
   { id: "silver", name: "Silver", level: 30, material: "silver", blurb: "Mirror silver with a beaded rim", extras: ["beads"], motion: "glint", gem: "round" },
-  { id: "gold", name: "Gold", level: 60, material: "gold", blurb: "Gold laurel, cushion-cut rubies", extras: ["laurel"], motion: "sweep", gem: "cushion" },
-  { id: "platinum", name: "Platinum", level: 100, material: "platinum", blurb: "Platinum laurel, emerald cuts", extras: ["laurel"], motion: "sweep", gem: "emerald" },
-  { id: "jade", name: "Jade", level: 160, material: "jade", blurb: "Polished jade, citrine cabochons", extras: ["laurel"], motion: "sweep", gem: "oval" },
-  { id: "cobalt", name: "Cobalt", level: 240, material: "cobalt", blurb: "Anodised cobalt, hexagon stones", extras: ["laurel"], motion: "sweep", gem: "hex" },
-  { id: "diamond", name: "Diamond", level: 350, material: "diamond", blurb: "Ice-blue diamond, brilliant cuts", extras: ["laurel", "facets"], motion: "sweep", gem: "brilliant" },
-  { id: "holo", name: "Holo Foil", level: 500, material: "holo", blurb: "Iridescent foil, marquise opals", extras: ["laurel", "foil"], motion: "holo", gem: "marquise" },
-  { id: "prism", name: "Prism", level: 700, material: "prism", blurb: "Cut crystal, kite diamonds", extras: ["laurel", "facets"], motion: "prism", gem: "kite" },
+  { id: "gold", name: "Gold", level: 60, material: "gold", blurb: "Gold laurel, cushion-cut rubies", extras: [], motion: "sweep", gem: "cushion" },
+  { id: "platinum", name: "Platinum", level: 100, material: "platinum", blurb: "Platinum laurel, emerald cuts", extras: [], motion: "sweep", gem: "emerald" },
+  { id: "jade", name: "Jade", level: 160, material: "jade", blurb: "Polished jade, citrine cabochons", extras: [], motion: "sweep", gem: "oval" },
+  { id: "cobalt", name: "Cobalt", level: 240, material: "cobalt", blurb: "Anodised cobalt, hexagon stones", extras: [], motion: "sweep", gem: "hex" },
+  { id: "diamond", name: "Diamond", level: 350, material: "diamond", blurb: "Ice-blue diamond, brilliant cuts", extras: ["facets"], motion: "sweep", gem: "brilliant" },
+  { id: "holo", name: "Holo Foil", level: 500, material: "holo", blurb: "Iridescent foil, marquise opals", extras: ["foil"], motion: "holo", gem: "marquise" },
+  { id: "prism", name: "Prism", level: 700, material: "prism", blurb: "Cut crystal, kite diamonds", extras: ["facets"], motion: "prism", gem: "kite" },
 ];
-export const STAGE_NAMES = ["", "●", "●●", "●●●", "★"];
+/* Stages inside one tier: plain → ● → ●● → ●●● → wreath → ★ (top gem becomes a star) → ★★★ (all three). */
+export const STAGE_NAMES = ["Plain", "●", "●●", "●●●", "Wreath", "★", "★★★"];
+export const STAGES = STAGE_NAMES.length, TOP_STAGE = STAGES - 1;
 
 // XP curve: Lv 10 ≈ a few evenings, Lv 100 ≈ a long-term main game, Lv 999 ≈ a lifetime
 export const xpForLevel = (L: number) => (L <= 0 ? 0 : Math.round(25 * Math.pow(L, 1.45)));
@@ -48,12 +50,12 @@ export function levelFor(xp: number) {
 }
 export const frameIndexFor = (level: number) => FRAMES.reduce((i, f, k) => (level >= f.level ? k : i), 0);
 
-/** Tier + stage (0 plain … 4 star) for a level; `max` at 999. */
+/** Tier + stage (0 plain … 6 three stars) for a level; `max` at 999. */
 export function frameState(level: number) {
   const i = frameIndexFor(level), t = FRAMES[i], end = FRAMES[i + 1]?.level ?? MAX_LEVEL;
-  // Cartridge (Lv 0–10) is the starter shell: no gems, no star — it jumps straight to Bronze.
-  const stage = i === 0 ? 0 : Math.min(4, Math.floor(((level - t.level) / Math.max(1, end - t.level)) * 5));
-  const nextStageAt = i === 0 ? FRAMES[1].level : stage < 4 ? t.level + Math.ceil(((stage + 1) / 5) * (end - t.level)) : FRAMES[i + 1]?.level;
+  // Cartridge (Lv 0–10) is the starter shell: no gems, no stars — it jumps straight to Bronze.
+  const stage = i === 0 ? 0 : Math.min(TOP_STAGE, Math.floor(((level - t.level) / Math.max(1, end - t.level)) * STAGES));
+  const nextStageAt = i === 0 ? FRAMES[1].level : stage < TOP_STAGE ? t.level + Math.ceil(((stage + 1) / STAGES) * (end - t.level)) : FRAMES[i + 1]?.level;
   return { index: i, tier: t, stage, max: level >= MAX_LEVEL, nextStageAt };
 }
 
@@ -62,6 +64,9 @@ export type Stats = {
   games: { system: string; playSeconds?: number; coverSource?: string }[];
   saves: number; nightSaves: number; earlySaves: number; devices: number;
   accountDays: number; users: number; owner: boolean;
+  /** seconds with the site open and active */ linkSeconds: number;
+  /** longest run of days in a row with a cloud save */ bestStreak: number;
+  /** most cloud saves on one day */ dayMaxSaves: number;
 };
 export type Family = {
   id: string; name: string; art: string; desc: (n: number) => string;
@@ -81,16 +86,23 @@ export const FAMILIES: Family[] = [
   { id: "curator", name: "Curator", art: "frame", steps: [1, 5, 15], value: (s) => s.games.filter((g) => g.coverSource === "custom").length, desc: (n) => `${n} custom cover${n > 1 ? "s" : ""}`, unit: "covers" },
   { id: "party", name: "Party", art: "party", steps: [2, 4, 8], value: (s) => s.users, desc: (n) => `${n} people on this PC`, unit: "people" },
   { id: "veteran", name: "Veteran", art: "medal", steps: [7, 90, 365], value: (s) => s.accountDays, desc: (n) => `Member for ${n} days`, unit: "days" },
+  { id: "plugged-in", name: "Plugged In", art: "hourglass", steps: [10, 100, 500], value: (s) => Math.floor(s.linkSeconds / 3600), desc: (n) => `Spend ${n} hours in Link Cable`, unit: "h" },
+  { id: "streak", name: "On a Roll", art: "flame", steps: [3, 7, 30], value: (s) => s.bestStreak, desc: (n) => `Play ${n} days in a row`, unit: "days" },
+  { id: "quick-saver", name: "Quick Saver", art: "bolt", steps: [10, 25, 50], value: (s) => s.dayMaxSaves, desc: (n) => `${n} cloud saves in one day`, unit: "saves" },
+  { id: "completionist", name: "Completionist", art: "trophy", steps: [5, 10, 14], value: () => 0, desc: (n) => `Earn ${n} other badges`, unit: "badges" },
   { id: "host", name: "Host", art: "house", steps: [1, 1, 1], value: (s) => (s.owner ? 1 : 0), desc: () => "Owner of this PC" },
 ];
 
 export type Earned = { family: Family; step: number; value: number; next?: number }; // step: 0 none, 1 bronze, 2 silver, 3 gold
-export function evaluate(s: Stats) {
-  const earned: Earned[] = FAMILIES.map((f) => {
-    const v = f.value(s);
-    const step = f.id === "host" ? (v ? 3 : 0) : f.steps.filter((t) => v >= t).length;
+export function evaluate(s: Stats, opts: { all?: boolean } = {}) {
+  const one = (f: Family, v: number): Earned => {
+    const step = opts.all ? 3 : f.id === "host" ? (v ? 3 : 0) : f.steps.filter((t) => v >= t).length;
     return { family: f, step, value: v, next: f.id === "host" ? undefined : f.steps[step] };
-  });
+  };
+  const base = FAMILIES.map((f) => one(f, f.value(s)));
+  // Completionist counts the *other* badges you've earned
+  const others = base.filter((e) => e.family.id !== "completionist" && e.step > 0).length;
+  const earned = base.map((e) => (e.family.id === "completionist" ? one(e.family, others) : e));
   const playXp = Math.floor(s.games.reduce((a, g) => a + (g.playSeconds ?? 0), 0) / 60) * 2;
   const achXp = earned.reduce((a, e) => a + STEP_XP.slice(0, e.step).reduce((x, y) => x + y, 0), 0);
   return { earned, playXp, achXp, ...levelFor(playXp + achXp) };
@@ -103,6 +115,6 @@ export function resolveFrame(snap?: FlairSnapshot | null) {
   if (!snap || snap.frame === "none") return null;
   const st = frameState(snap.level);
   const pick = FRAMES.findIndex((f) => f.id === snap.frame);
-  if (pick >= 0 && pick < st.index) return { tier: FRAMES[pick], stage: 4, max: false };
+  if (pick >= 0 && pick < st.index) return { tier: FRAMES[pick], stage: TOP_STAGE, max: false };
   return { tier: st.tier, stage: st.stage, max: st.max };
 }

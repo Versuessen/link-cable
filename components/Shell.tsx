@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import Icon, { Avatar, Battery } from "./Icon";
-import { focusFirst, useNavEvent } from "./nav";
+import { activate, emit, focusFirst, useNavEvent } from "./nav";
 import { sfx } from "./sfx";
 import { usePrefs } from "../lib/prefs";
 import { EquippedBadge, FlairAvatar, type FlairSnapshot } from "./Flair";
@@ -16,49 +16,151 @@ export function Clock({ big = false }: { big?: boolean }) {
   return <span className={`clock ${big ? "big" : ""}`}>{String(h % 12 || 12).padStart(2, "0")}:{m}<sup>{h < 12 ? "AM" : "PM"}</sup></span>;
 }
 
+/** Battery level where the browser exposes it (Chrome/Edge on laptops and Android). Hidden on desktops
+ *  without a battery and on browsers that don't share it (Safari, Firefox, all iOS browsers). */
 function useBattery() {
   const [b, setB] = useState<{ level: number; charging: boolean } | null>(null);
   useEffect(() => {
     let bat: any;
-    const upd = () => bat && setB({ level: bat.level, charging: bat.charging });
-    (navigator as any).getBattery?.().then((x: any) => { bat = x; upd(); x.addEventListener("levelchange", upd); x.addEventListener("chargingchange", upd); }).catch(() => {});
+    // a desktop PC reports "100 %, charging, never discharges": that isn't a battery worth showing
+    const upd = () => bat && setB(bat.level === 1 && bat.charging && bat.dischargingTime === Infinity && bat.chargingTime === 0 && !matchMedia("(pointer: coarse)").matches ? null : { level: bat.level, charging: bat.charging });
+    (navigator as any).getBattery?.().then((x: any) => { bat = x; upd(); for (const ev of ["levelchange", "chargingchange", "dischargingtimechange"]) x.addEventListener(ev, upd); }).catch(() => {});
   }, []);
   return b;
 }
-function useOnline() {
-  const [on, setOn] = useState(true);
-  useEffect(() => { setOn(navigator.onLine); const a = () => setOn(true), b = () => setOn(false); addEventListener("online", a); addEventListener("offline", b); return () => { removeEventListener("online", a); removeEventListener("offline", b); }; }, []);
-  return on;
-}
 
-export type Me = { id: string; name: string; color: string; owner?: boolean; avatar?: string; profile?: { flair?: FlairSnapshot | null; playSeconds?: number; saves?: number; nightSaves?: number; earlySaves?: number; devices?: string[] }; createdAt?: number };
-let meCache: Me | null = null;
+export type Me = { id: string; name: string; color: string; owner?: boolean; avatar?: string; colorAuto?: boolean; createdAt?: number;
+  profile?: { flair?: FlairSnapshot | null; playSeconds?: number; saves?: number; nightSaves?: number; earlySaves?: number; devices?: string[]; linkSeconds?: number; bestStreak?: number; dayMax?: number } };
+// one shared copy of "me" for every component: one request, instant local updates
+let meCache: Me | null = null, meLoading: Promise<void> | null = null;
+const meSubs = new Set<(m: Me | null) => void>();
+const setMe = (m: Me | null) => { meCache = m; meSubs.forEach((f) => f(m)); };
+export function loadMe() {
+  return (meLoading ??= fetch("/api/account").then((r) => (r.ok ? r.json() : null))
+    .then((d) => { if (d?.user) setMe({ ...d.user, profile: d.profile, createdAt: d.createdAt }); }).catch(() => {}).finally(() => { meLoading = null; }));
+}
+/** Change something about me: the UI updates immediately, the server catches up in the background. */
+export async function patchMe(patch: { name?: string; color?: string; avatar?: string | null; colorAuto?: boolean }, body: Record<string, unknown> = patch) {
+  const before = meCache;
+  if (meCache) { const { avatar, ...rest } = patch; setMe({ ...meCache, ...rest, avatar: avatar === null ? undefined : avatar ?? meCache.avatar }); }
+  try {
+    const r = await fetch("/api/account", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || "Couldn't save");
+    if (d.profile && meCache) setMe({ ...meCache, profile: { ...meCache.profile, ...d.profile } });
+  } catch (e) { setMe(before); throw e; }
+}
 /** The signed-in account (name + colour for the avatar). */
 export function useMe() {
-  const [me, setMe] = useState<Me | null>(meCache);
+  const [me, set] = useState<Me | null>(meCache);
   useEffect(() => {
-    const load = () => fetch("/api/account").then((r) => (r.ok ? r.json() : null)).then((d) => { if (d?.user) { meCache = { ...d.user, profile: d.profile, createdAt: d.createdAt }; setMe(meCache); } }).catch(() => {});
-    load(); addEventListener("pc-me", load);
-    return () => removeEventListener("pc-me", load);
+    meSubs.add(set); set(meCache);
+    if (!meCache) loadMe();
+    return () => { meSubs.delete(set); };
   }, []);
   return me;
 }
+if (typeof window !== "undefined") addEventListener("pc-me", () => { loadMe(); });
+
+// ---------------------------------------------------------------- presence (who's online)
+export type Friend = { id: string; name: string; color: string; avatar?: string; status: "online" | "away" | "dnd" | "offline"; game?: string; seenAt?: number };
+type Presence = { users: Friend[]; mode: "online" | "away" | "dnd" | "invisible" };
+let presence: Presence | null = null, beating = false, lastInput = Date.now(), nowPlaying: string | undefined;
+const presSubs = new Set<(p: Presence | null) => void>();
+async function heartbeat(extra: { mode?: string; state?: string } = {}) {
+  const idle = document.hidden || (!nowPlaying && Date.now() - lastInput > 5 * 60_000); // in a game the emulator has the keyboard, so input here says nothing
+  try {
+    const r = await fetch("/api/presence", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ state: idle ? "idle" : "active", game: nowPlaying, ...extra }) });
+    if (!r.ok) return;
+    const d = await r.json();
+    presence = { users: d.users, mode: d.me.mode };
+    if (meCache) meCache = { ...meCache, profile: { ...meCache.profile, linkSeconds: d.me.linkSeconds } };
+    presSubs.forEach((f) => f(presence));
+  } catch {}
+}
+export const setPresenceMode = (mode: Presence["mode"]) => { if (presence) { presence = { ...presence, mode }; presSubs.forEach((f) => f(presence)); } return heartbeat({ mode }); };
+/** Keeps my status fresh while a tab is open; `game` shows "Playing …" to friends. */
+export function usePresence(game?: string) {
+  const [p, set] = useState<Presence | null>(presence);
+  useEffect(() => {
+    nowPlaying = game;
+    presSubs.add(set);
+    if (!beating) {
+      beating = true;
+      const mark = () => { lastInput = Date.now(); };
+      for (const ev of ["pointerdown", "keydown", "pointermove"]) addEventListener(ev, mark, { passive: true });
+      let timer: any;
+      const loop = () => { heartbeat(); timer = setTimeout(loop, document.hidden ? 5 * 60_000 : 2 * 60_000); };
+      loop();
+      document.addEventListener("visibilitychange", () => { clearTimeout(timer); loop(); });
+      addEventListener("pagehide", () => { try { navigator.sendBeacon("/api/presence", new Blob([JSON.stringify({ state: "gone" })], { type: "application/json" })); } catch {} });
+    } else if (game) heartbeat();
+    return () => { presSubs.delete(set); if (game) nowPlaying = undefined; };
+  }, [game]);
+  return p;
+}
+const STATUS_LABEL = { online: "Online", away: "Away", dnd: "Do not disturb", offline: "Offline" } as const;
+
+/** Top-bar people button: a dot per friend who's on, opens the full list with your own status switch. */
+function Friends({ busy }: { busy?: boolean }) {
+  const p = usePresence(), me = useMe();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useNavEvent("nav:back", () => setOpen(false), []);
+  useEffect(() => {
+    if (!open) return;
+    const out = (e: PointerEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    addEventListener("pointerdown", out, true); setTimeout(() => focusFirst(".friends-pop [data-nav]"), 30);
+    return () => removeEventListener("pointerdown", out, true);
+  }, [open]);
+  const others = (p?.users ?? []).filter((u) => u.id !== me?.id);
+  const on = others.filter((u) => u.status !== "offline").length;
+  const order = { online: 0, dnd: 1, away: 2, offline: 3 };
+  const mine = p?.mode === "invisible" ? "offline" : p?.mode ?? "online";
+  return (
+    <div className="friends" ref={ref}>
+      <button data-nav className={`iconbtn friends-btn ${busy ? "busy" : ""}`} onClick={() => { setOpen((o) => !o); sfx(open ? "back" : "open"); }} aria-label={`Friends: ${on} online`} title={busy ? "Syncing to cloud…" : `${on} online`}>
+        <Icon name={busy ? "sync" : "users"} size={26} className={busy ? "spin" : ""} />
+        {on > 0 && !busy && <span className="friends-count">{on}</span>}
+        <i className={`dot ${mine}`} />
+      </button>
+      {open && (
+        <div className="friends-pop" data-nav-scope role="dialog" aria-label="Friends">
+          <div className="friends-me">
+            <span className="seg small">
+              {(["online", "away", "dnd", "invisible"] as const).map((m) => (
+                <button key={m} data-nav className={p?.mode === m ? "on" : ""} onClick={() => { setPresenceMode(m); sfx("tab"); }} title={m === "invisible" ? "Appear offline" : STATUS_LABEL[m as "online"]}>
+                  <i className={`dot ${m === "invisible" ? "offline" : m}`} />{m === "online" ? "Online" : m === "away" ? "Away" : m === "dnd" ? "Busy" : "Hidden"}
+                </button>
+              ))}
+            </span>
+          </div>
+          {others.length === 0 && <p className="friends-empty">Nobody else has an account here yet.</p>}
+          {[...others].sort((a, b) => order[a.status] - order[b.status] || a.name.localeCompare(b.name)).map((u) => (
+            <div key={u.id} className={`friend ${u.status}`}>
+              <span className="friend-av"><Avatar name={u.name} color={u.color} src={u.avatar} size={42} /><i className={`dot ${u.status}`} /></span>
+              <span className="friend-text"><b>{u.name}</b><small>{u.status === "offline" ? "Offline" : u.game ? `Playing ${u.game}` : STATUS_LABEL[u.status]}</small></span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function TopBar({ onSearch, onProfile, busy, title }: { onSearch?: () => void; onProfile?: () => void; busy?: boolean; title?: React.ReactNode }) {
-  const bat = useBattery(), online = useOnline(), me = useMe();
+  const bat = useBattery(), me = useMe();
   return (
     <header className="topbar">
       <div className="topbar-left">
         {onProfile
-          ? <button data-nav className="avatar-btn" onClick={onProfile} aria-label="Profile menu"><FlairAvatar name={me?.name} color={me?.color} src={me?.avatar} size={46} flair={me?.profile?.flair} compact /></button>
-          : <FlairAvatar name={me?.name} color={me?.color} src={me?.avatar} size={46} flair={me?.profile?.flair} compact />}
+          ? <button data-nav className="avatar-btn" onClick={onProfile} aria-label="Profile menu"><FlairAvatar self name={me?.name} color={me?.color} src={me?.avatar} size={46} flair={me?.profile?.flair} compact /></button>
+          : <FlairAvatar self name={me?.name} color={me?.color} src={me?.avatar} size={46} flair={me?.profile?.flair} compact />}
         {title}
       </div>
       <div className="topbar-right">
         {onSearch && <button data-nav className="iconbtn" onClick={onSearch} aria-label="Search"><Icon name="search" size={26} /></button>}
-        <span className={`status ${busy ? "busy" : ""}`} title={busy ? "Syncing to cloud…" : online ? "Online · cloud saves up to date" : "Offline"}>
-          <Icon name={busy ? "sync" : online ? "wifi" : "wifioff"} size={26} className={busy ? "spin" : ""} />
-        </span>
+        <Friends busy={busy} />
         <Clock />
         {bat && <span className="bat">{Math.round(bat.level * 100)}%<Battery level={bat.level} charging={bat.charging} /></span>}
       </div>
@@ -73,15 +175,20 @@ export const H = {
   back: { btn: "B", key: "Esc", label: "Back" } as Hint,
   options: { btn: "+", key: "O", label: "Options" } as Hint,
 };
+/** What an on-screen hint does when clicked or tapped: the same thing as its key / controller button. */
+const HINT_ACT: Record<string, () => void> = {
+  A: () => activate(), B: () => { sfx("back"); emit("nav:back"); }, "+": () => emit("nav:options"),
+  L: () => { sfx("tab"); emit("nav:tab", -1); }, R: () => { sfx("tab"); emit("nav:tab", 1); },
+};
+export function HintButton({ h }: { h: Hint }) {
+  // mousedown is cancelled so the click doesn't steal focus from the thing "Select" should press
+  return <button className="hint" data-silent={h.btn === "A" ? "" : undefined} onMouseDown={(e) => e.preventDefault()} onClick={() => HINT_ACT[h.btn]?.()}><kbd className="key">{h.key}</kbd><span className="glyph">{h.btn}</span>{h.label}</button>;
+}
 export function BottomBar({ hints = [H.select, H.back], onMenu }: { hints?: Hint[]; onMenu?: () => void }) {
   return (
     <footer className="bottombar">
-      <button className="hint menu" onClick={onMenu}><kbd className="key">F1</kbd><span className="glyph">−</span>Menu</button>
-      <div className="hints">
-        {hints.map((h) => (
-          <span key={h.btn + h.label} className="hint"><kbd className="key">{h.key}</kbd><span className="glyph">{h.btn}</span>{h.label}</span>
-        ))}
-      </div>
+      <button className="hint menu" data-silent onMouseDown={(e) => e.preventDefault()} onClick={onMenu}><kbd className="key">F1</kbd><span className="glyph">−</span>Menu</button>
+      <div className="hints">{hints.map((h) => <HintButton key={h.btn + h.label} h={h} />)}</div>
     </footer>
   );
 }
@@ -128,66 +235,92 @@ export function PromptModal({ title, label, initial, onSubmit, onClose }: {
 }
 
 /**
- * Quick menu — opened by clicking your picture or pressing F1 / − / Home.
- * The dock already covers navigation, so this is about *you*: profile, quick settings, sign out.
- * It's anchored to the avatar so the little pointer always lines up with it.
+ * Quick menu: about *you* (profile, quick settings, sign out). Two anchors, never both at once:
+ *  - "top": drops down from your picture (click it)
+ *  - "bottom": rises from the Menu hint (click it, or F1 / − / Home), with the order flipped so the
+ *    profile link sits nearest the hint.
+ * Click outside to close. ← / → close it too, except on the theme / sound row where they move.
  */
-export function QuickMenu({ onClose, onProfile, onHome }: { onClose: () => void; onProfile: (section?: string) => void; onHome?: () => void }) {
+export type MenuAnchor = "top" | "bottom";
+export function QuickMenu({ anchor, onAnchor, onClose, onProfile, onHome }: { anchor: MenuAnchor; onAnchor: (a: MenuAnchor) => void; onClose: () => void; onProfile: (section?: string) => void; onHome?: () => void }) {
   const me = useMe();
   const [prefs, update] = usePrefs();
   const [leaving, setLeaving] = useState(false);
-  const [pos, setPos] = useState<{ left: number; top: number; arrow: number } | null>(null);
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; arrow: number } | null>(null);
   useNavEvent("nav:back", onClose, [onClose]);
-  useNavEvent("nav:menu", onClose, [onClose]);
+  const SEL = { top: ".topbar .avatar-btn, .topbar .avatar", bottom: ".bottombar .hint.menu" };
   useEffect(() => {
     const place = () => {
-      const a = document.querySelector<HTMLElement>(".topbar .avatar-btn, .topbar .avatar")?.getBoundingClientRect();
-      if (!a) return setPos({ left: 16, top: 90, arrow: 32 });
-      const cx = a.left + a.width / 2, width = Math.min(360, innerWidth - 24);
-      const left = Math.max(12, Math.min(cx - 40, innerWidth - width - 12));
-      setPos({ left, top: a.bottom + 14, arrow: cx - left });
+      const a = document.querySelector<HTMLElement>(SEL[anchor])?.getBoundingClientRect();
+      const width = Math.min(360, innerWidth - 24);
+      if (!a || !a.width) return setPos(anchor === "top" ? { left: 16, top: 96, arrow: 32 } : { left: 16, bottom: 84, arrow: 48 });
+      const cx = a.left + a.width / 2;
+      const left = Math.max(12, Math.min(cx - 44, innerWidth - width - 12));
+      // clear of the avatar's focus ring and glow, so the pointer never touches it
+      setPos(anchor === "top" ? { left, top: a.bottom + 26, arrow: cx - left } : { left, bottom: innerHeight - a.top + 22, arrow: cx - left });
     };
     place(); addEventListener("resize", place);
     setTimeout(() => focusFirst(".menu-pop [data-autofocus]"), 30);
-    return () => removeEventListener("resize", place);
-  }, []);
+    const onMove = (e: Event) => {
+      const { dir, from } = (e as CustomEvent).detail as { dir: string; from: Element | null };
+      if ((dir === "left" || dir === "right") && !from?.closest(".menu-quick")) { e.preventDefault(); sfx("back"); onClose(); }
+    };
+    addEventListener("nav:move", onMove);
+    return () => { removeEventListener("resize", place); removeEventListener("nav:move", onMove); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anchor]);
   async function logout() {
     setLeaving(true); sfx("back");
+    try { navigator.sendBeacon("/api/presence", new Blob([JSON.stringify({ state: "gone" })], { type: "application/json" })); } catch {}
     try { await fetch("/api/logout", { method: "POST", keepalive: true }); } catch {}
     location.replace("/login");
   }
   const go = (fn: () => void) => () => { onClose(); fn(); };
+  // a click outside closes; a click on the *other* trigger switches the menu over to it
+  const outside = (e: React.MouseEvent) => {
+    if (e.target !== e.currentTarget) return;
+    const other: MenuAnchor = anchor === "top" ? "bottom" : "top";
+    const r = document.querySelector<HTMLElement>(SEL[other])?.getBoundingClientRect();
+    if (r && e.clientX >= r.left - 6 && e.clientX <= r.right + 6 && e.clientY >= r.top - 6 && e.clientY <= r.bottom + 6) { sfx("open"); onAnchor(other); }
+    else { sfx("back"); onClose(); }
+  };
+  const head = (
+    <button key="head" className="menu-head" data-nav data-autofocus onClick={go(() => onProfile("profile"))}>
+      <FlairAvatar self name={me?.name} color={me?.color} src={me?.avatar} size={48} flair={me?.profile?.flair} showLevel={false} compact />
+      <span className="menu-who">
+        <strong>{me?.name ?? "…"} <EquippedBadge self flair={me?.profile?.flair} size={24} /></strong>
+        <span>View profile</span>
+      </span>
+      <Icon name="back" size={18} className="flip dim" />
+    </button>
+  );
+  const quick = (
+    <div key="quick" className="menu-quick">
+      <span className="seg small">
+        {(["light", "dark", "system"] as const).map((t) => (
+          <button key={t} data-nav className={prefs.theme === t ? "on" : ""} onClick={() => { update({ theme: t }); sfx("tab"); }} aria-label={`${t} theme`}>
+            <Icon name={t === "light" ? "sun" : t === "dark" ? "moon" : "pad"} size={18} />{t === "light" ? "Light" : t === "dark" ? "Dark" : "Auto"}
+          </button>
+        ))}
+      </span>
+      <button data-nav className={`qtoggle ${prefs.sounds ? "on" : ""}`} onClick={() => { update({ sounds: !prefs.sounds }); if (!prefs.sounds) sfx("tab"); }} aria-label="Interface sounds">
+        <Icon name="sound" size={20} />
+      </button>
+    </div>
+  );
+  const items = (<div key="items" className="menu-items">
+    {onHome && <button data-nav role="menuitem" className="menu-item" onClick={go(onHome)}><Icon name="home" size={22} />Home</button>}
+    <button data-nav role="menuitem" className="menu-item" onClick={go(() => onProfile("security"))}><Icon name="shield" size={22} />Security</button>
+    <button data-nav role="menuitem" className="menu-item" onClick={logout}><Icon name="users" size={22} />Switch user</button>
+    <button data-nav role="menuitem" className="menu-item danger" onClick={logout} disabled={leaving}>
+      <Icon name="power" size={22} />{leaving ? "Signing off…" : "Log out"}
+    </button>
+  </div>);
   return (
-    <div className="scrim clear" data-nav-scope onClick={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="scrim clear" data-nav-scope onClick={outside}>
       {pos && (
-        <nav className="menu-pop" role="menu" style={{ left: pos.left, top: pos.top, ["--arrow" as any]: `${pos.arrow}px` }}>
-          <button className="menu-head" data-nav data-autofocus onClick={go(() => onProfile("profile"))}>
-            <FlairAvatar name={me?.name} color={me?.color} src={me?.avatar} size={48} flair={me?.profile?.flair} showLevel={false} />
-            <span className="menu-who">
-              <strong>{me?.name ?? "…"} <EquippedBadge flair={me?.profile?.flair} size={24} /></strong>
-              <span>View profile</span>
-            </span>
-            <Icon name="back" size={18} className="flip dim" />
-          </button>
-          <div className="menu-quick">
-            <span className="seg small">
-              {(["light", "dark", "system"] as const).map((t) => (
-                <button key={t} data-nav className={prefs.theme === t ? "on" : ""} onClick={() => { update({ theme: t }); sfx("tab"); }} aria-label={`${t} theme`}>
-                  <Icon name={t === "light" ? "sun" : t === "dark" ? "moon" : "pad"} size={18} />{t === "light" ? "Light" : t === "dark" ? "Dark" : "Auto"}
-                </button>
-              ))}
-            </span>
-            <button data-nav className={`qtoggle ${prefs.sounds ? "on" : ""}`} onClick={() => { update({ sounds: !prefs.sounds }); if (!prefs.sounds) sfx("tab"); }} aria-label="Interface sounds">
-              <Icon name="sound" size={20} />
-            </button>
-          </div>
-          {onHome && <button data-nav role="menuitem" className="menu-item" onClick={go(onHome)}><Icon name="home" size={22} />Home</button>}
-          <button data-nav role="menuitem" className="menu-item" onClick={go(() => onProfile("security"))}><Icon name="shield" size={22} />Security</button>
-          <button data-nav role="menuitem" className="menu-item" onClick={logout}><Icon name="users" size={22} />Switch user</button>
-          <div className="menu-sep" />
-          <button data-nav role="menuitem" className="menu-item danger" onClick={logout} disabled={leaving}>
-            <Icon name="power" size={22} />{leaving ? "Signing off…" : "Log out"}
-          </button>
+        <nav className={`menu-pop ${anchor}`} role="menu" style={{ left: pos.left, top: pos.top, bottom: pos.bottom, ["--arrow" as any]: `${pos.arrow}px` }}>
+          {anchor === "top" ? [head, quick, items] : [items, quick, head]}
         </nav>
       )}
     </div>

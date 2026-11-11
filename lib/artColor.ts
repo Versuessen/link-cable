@@ -71,3 +71,13 @@ export function useArtColor(rom: RomView | null) {
   }, [key]);
   return color;
 }
+
+/** A muted backdrop colour for a profile picture: the picture's own middle colour, softened. Returns #rrggbb. */
+export async function sampleAvatarColor(url: string): Promise<string | null> {
+  const m = (await sampleColor(url))?.match(/hsl\((\d+) (\d+)% (\d+)%\)/);
+  if (!m) return null;
+  const h = +m[1], sat = Math.min(0.5, (+m[2] / 100) * 0.6), l = 0.6;
+  const a = sat * Math.min(l, 1 - l);
+  const f = (n: number) => { const k = (n + h / 30) % 12; return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)))).toString(16).padStart(2, "0"); };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}

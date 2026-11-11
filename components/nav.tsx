@@ -8,7 +8,7 @@
  *  - Select(−) / Home / M / F1 → "nav:menu"      Start(+) / "+" / O → "nav:options"
  */
 import { useEffect } from "react";
-import { sfx } from "./sfx";
+import { sfx, lastSfx } from "./sfx";
 
 type Dir = "up" | "down" | "left" | "right";
 export const emit = (name: string, detail?: unknown) => window.dispatchEvent(new CustomEvent(name, { detail }));
@@ -57,9 +57,13 @@ function move(dir: Dir) {
   doMove(dir);
 }
 function doMove(dir: Dir) {
-  const all = candidates();
+  let all = candidates();
   const cur = document.activeElement as HTMLElement | null;
   if (!cur || !all.includes(cur)) return focusEl(all[0]);
+  // Zones (e.g. the settings list vs. the open settings page): movement stays inside the zone.
+  // A zone may name one exit per direction: data-nav-exit-left=".selector" etc.
+  const zone = cur.closest<HTMLElement>("[data-nav-zone]");
+  if (zone) all = all.filter((el) => zone.contains(el));
   const a = cur.getBoundingClientRect();
   const ax = a.left + a.width / 2, ay = a.top + a.height / 2;
   let best: HTMLElement | null = null, bestScore = Infinity;
@@ -78,12 +82,15 @@ function doMove(dir: Dir) {
     const score = Math.max(0, main) + cross * 2.2;
     if (score < bestScore) { bestScore = score; best = el; }
   }
-  if (best) focusEl(best);
+  if (best) return focusEl(best);
+  const exit = zone?.dataset[`navExit${dir[0].toUpperCase()}${dir.slice(1)}`];
+  if (exit) focusEl(scope().querySelector<HTMLElement>(exit));
 }
 
-function activate() {
+/** Press the focused control (A / Enter, or the on-screen "Select" hint). The click sound comes from the global click handler. */
+export function activate() {
   const el = document.activeElement as HTMLElement | null;
-  if (el && el.matches("[data-nav]")) { sfx("select"); el.click(); }
+  if (el && el.matches("[data-nav]")) el.click();
 }
 
 export function NavProvider() {
@@ -113,8 +120,16 @@ export function NavProvider() {
     const hover = (e: PointerEvent) => {
       if (e.pointerType !== "mouse") return;
       const el = (e.target as HTMLElement).closest?.<HTMLElement>("[data-nav]");
-      if (el && el !== document.activeElement && !typing() && scope().contains(el)) el.focus({ preventScroll: true });
+      if (el && el !== document.activeElement && !typing() && scope().contains(el) && !el.hasAttribute("data-nohover")) el.focus({ preventScroll: true });
     };
+    // One place for the "select" click: every button press (mouse, touch, Enter, A) gets it unless the
+    // button's own handler already played something (open / tab / back / saved …).
+    const click = (e: MouseEvent) => {
+      const el = (e.target as HTMLElement).closest?.("button, [data-nav], [role=menuitem]");
+      if (!el || (el as HTMLButtonElement).disabled || el.hasAttribute("data-silent")) return;
+      if (performance.now() - lastSfx > 60) sfx("select");
+    };
+    addEventListener("click", click);
     addEventListener("keydown", key);
     addEventListener("pointerover", hover);
 
@@ -155,7 +170,7 @@ export function NavProvider() {
     raf = requestAnimationFrame(poll);
     const pad = () => document.documentElement.classList.add("has-pad");
     addEventListener("gamepadconnected", pad);
-    return () => { removeEventListener("keydown", key); removeEventListener("pointerover", hover); removeEventListener("gamepadconnected", pad); cancelAnimationFrame(raf); };
+    return () => { removeEventListener("keydown", key); removeEventListener("pointerover", hover); removeEventListener("click", click); removeEventListener("gamepadconnected", pad); cancelAnimationFrame(raf); };
   }, []);
   return null;
 }
