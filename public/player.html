@@ -12,6 +12,7 @@
 <body>
 <div id="game"></div>
 <script src="/ach-reader.js"></script>
+<script src="/randomizer.js"></script>
 <script>
 /*
  * PokéPC player host.
@@ -26,6 +27,9 @@
   const CORES = { gb: "gb", gbc: "gb", gba: "gba", nds: "nds" };
 
   const id = new URLSearchParams(location.search).get("id");
+  // a playthrough ("run") has its own saves: <game id>-r-<run id>
+  const run = new URLSearchParams(location.search).get("run");
+  const saveId = run && /^[a-z0-9]{8}$/.test(run) ? `${id}-r-${run}` : id;
   const emit = (type, data = {}) => parent.postMessage({ source: "pokepc", type, ...data }, location.origin);
 
   // ---- device identity (for cross-device conflict detection) ----
@@ -149,10 +153,10 @@
       }
       emit("saving", { reason });
       const [stateGz, shot] = await Promise.all([state ? gzip(state) : null, screenshot()]);
-      const { body: urls } = await api(`/api/saves/${id}`, { method: "POST", body: JSON.stringify({ hasState: !!stateGz, hasSram: !!sram, hasShot: !!shot }) });
+      const { body: urls } = await api(`/api/saves/${saveId}`, { method: "POST", body: JSON.stringify({ hasState: !!stateGz, hasSram: !!sram, hasShot: !!shot }) });
       await Promise.all([stateGz && put(urls.stateUrl, stateGz), sram && put(urls.sramUrl, sram), shot && put(urls.shotUrl, shot).catch(() => {})]);
       const now = Date.now();
-      const res = await api(`/api/saves/${id}`, { method: "PUT", keepalive: true, body: JSON.stringify({
+      const res = await api(`/api/saves/${saveId}`, { method: "PUT", keepalive: true, body: JSON.stringify({
         ver: urls.ver, baseVer: S.baseVer ?? null, force, reason, device, deviceId,
         hasState: !!stateGz, hasSram: !!sram, stateGz: true, hasShot: !!shot, localHour: new Date().getHours(), localDay: (function(d){return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")})(new Date()), playedDelta: Math.round((now - S.playedSince) / 1000),
       }) });
@@ -172,7 +176,7 @@
   }
 
   async function pullLatest(ver) {
-    const { body } = await api(`/api/saves/${id}` + (ver ? `?ver=${encodeURIComponent(ver)}` : ""));
+    const { body } = await api(`/api/saves/${saveId}` + (ver ? `?ver=${encodeURIComponent(ver)}` : ""));
     if (!body.save) return false;
     emit("loading-save");
     applySave(await downloadSave(body.save));
@@ -204,7 +208,7 @@
     } else {
       // came back — did another device play in the meantime?
       try {
-        const { body } = await api(`/api/saves/${id}`);
+        const { body } = await api(`/api/saves/${saveId}`);
         const cur = body.meta.current;
         if (cur && cur.ver !== S.baseVer && cur.deviceId !== deviceId) { S.blocked = true; emit("conflict", { current: cur }); return; }
       } catch {}
@@ -232,14 +236,23 @@
       if (!ok) throw new Error(body.error || "game not found");
       S.rom = body.rom;
       emit("boot", { rom: body.rom });
-      const [romData, saveRes] = await Promise.all([loadRom(body.rom, body.url), api(`/api/saves/${id}`)]);
+      const [rawRom, saveRes, runRes] = await Promise.all([loadRom(body.rom, body.url), api(`/api/saves/${saveId}`), run ? api(`/api/runs/${run}`) : null]);
+      let romData = rawRom;
+      const random = runRes && runRes.ok ? runRes.body.meta.random : null;
+      if (random && body.game) { // rebuild the randomized game from the run's seed (same result on every device)
+        emit("progress", { label: "Randomizing", pct: 1 });
+        const pd = await fetch("/pokedata.json").then((r) => r.json());
+        const out = window.LCRandomizer.apply(rawRom, body.game, random, pd);
+        romData = out.rom;
+        emit("randomized", { log: out.log, seed: random.seed });
+      }
       const remote = await downloadSave(saveRes.body.save);
       S.baseVer = saveRes.body.meta.current?.ver ?? null;
 
       Object.assign(window, {
         EJS_player: "#game",
         EJS_core: CORES[body.rom.system],
-        EJS_gameName: id,
+        EJS_gameName: saveId,
         EJS_gameUrl: new File([romData], body.rom.filename),
         EJS_pathtodata: EJS_CDN,
         EJS_startOnLoaded: true,

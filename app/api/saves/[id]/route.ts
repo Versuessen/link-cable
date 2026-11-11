@@ -99,8 +99,11 @@ export const PUT = guard(async (req: Request, { params }: Ctx) => {
 /** keep library index in sync (recent ordering, play time, hero screenshot) */
 async function touchIndex(K: Keys, id: string, meta: SaveMeta, user?: User, localHour?: number, localDay?: string) {
   const index = (await getJson<RomEntry[]>(K.index)) ?? [];
-  const rom = index.find((r) => r.id === id);
+  // a playthrough's saves ("<game>-r-<run>") only bump the game's "last played"; its play time stays with the run
+  const [romId, runId] = id.split("-r-");
+  const rom = index.find((r) => r.id === romId);
   if (!rom) return;
+  if (runId) { rom.lastPlayedAt = meta.current?.updatedAt; await putJson(K.index, index); return; }
   rom.lastPlayedAt = meta.current?.updatedAt;
   rom.playSeconds = meta.playSeconds;
   const withShot = meta.history.find((h) => h.hasShot && h.ver === meta.current?.ver) ?? meta.history.find((h) => h.hasShot);

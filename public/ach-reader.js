@@ -104,9 +104,12 @@
       if (lv < 1 || lv > 100 || !max || hp > max || max > 999) return null;
       const sp = gen === 1 ? G1DEX[listed] || 0 : listed;
       if (!sp || sp > L.dexMax) return null;
+      const ot = be16(w, o + (gen === 1 ? 0x0C : 0x06)), dv = be16(w, o + (gen === 1 ? 0x1B : 0x15));
+      const id = `${ot.toString(16)}.${dv.toString(16)}`;
       let shiny = false;
       if (gen === 2) { const a = w[o + 0x15] >> 4, d = w[o + 0x15] & 15, s = w[o + 0x16] >> 4, c = w[o + 0x16] & 15; shiny = d === 10 && s === 10 && c === 10 && [2, 3, 6, 7, 10, 11, 14, 15].includes(a); }
-      out.push({ sp, lv, hp, max, shiny, egg: false, item: gen === 2 ? w[o + 1] : 0 });
+      const met = gen === 2 ? w[o + 0x1E] & 0x7F : 0; // Crystal: landmark where it was caught (0 = not recorded)
+      out.push({ sp, lv, hp, max, shiny, egg: false, item: gen === 2 ? w[o + 1] : 0, id, met: met || null });
     }
     return out;
   }
@@ -127,8 +130,12 @@
       money = (w[m] << 16) | (w[m + 1] << 8) | w[m + 2]; badgeBits = w[m + 9]; kanto = w[m + 10];
     }
     if (money < 0 || money > 999999) return { bad: "money" };
+    // where the player is now (Gen 1: wCurMap; Gen 2: wMapGroup/wMapNumber), used for games that don't record catch locations
+    let here = null;
+    if (gen === 1) here = `g1map:${w[p + 0x1FB]}`;
+    else { const g = w[p - 0x22], n = w[p - 0x21]; if (g >= 1 && g <= 26 && n >= 1 && n <= 100) here = `${ver === "crystal" ? "cmap" : "gsmap"}:${g}.${n}`; }
     return {
-      gen, playSeconds: null, owned, seen: seenL.length,
+      gen, playSeconds: null, owned, seen: seenL.length, here,
       badges: popcount(badgeBits) + popcount(kanto), badgeBits: badgeBits | (kanto << 8),
       champion: gen === 2 && kanto > 0, money, coins: null, party, partyLive: true, map: null,
     };
@@ -167,7 +174,7 @@
     const ord = ORDER[pid % 24], g = ord.indexOf("G") * 12, m = ord.indexOf("M") * 12;
     const sp = u16(d, g), lv = h[o + 0x54], hp = u16(h, o + 0x56), max = u16(h, o + 0x58);
     if (!sp || sp > 439 || lv < 1 || lv > 100 || hp > max || max > 999) return null;
-    return { pid, sp, item: u16(d, g + 2), lv, hp, max, egg: !!((u32(d, m + 4) >>> 30) & 1),
+    return { pid, ot, sp, item: u16(d, g + 2), lv, hp, max, egg: !!((u32(d, m + 4) >>> 30) & 1), met: d[m + 1],
       shiny: (((ot & 0xFFFF) ^ (ot >>> 16) ^ (pid & 0xFFFF) ^ (pid >>> 16)) & 0xFFFF) < 8 };
   }
   const g3Exact = (h, o, n) => { const out = []; for (let i = 0; i < n; i++) { const m = g3Mon(h, o + i * 100); if (!m) return null; out.push(m); } return out; };
@@ -225,8 +232,8 @@
     return {
       gen: 3, playSeconds: u16(ew, b2 + 0x0E) * 3600 + ew[b2 + 0x10] * 60 + ew[b2 + 0x11], clock: ew[b2 + 0x12],
       owned, seen: seenL.length, badges: popcount(badgeBits), badgeBits, champion: flag(L.clear), money, coins,
-      party: party.map((x) => ({ sp: x.sp, lv: x.lv, hp: x.hp, max: x.max, shiny: x.shiny, egg: x.egg, item: x.item })),
-      partyLive, map: [ew[b1 + 4], ew[b1 + 5]],
+      party: party.map((x) => ({ sp: x.sp, lv: x.lv, hp: x.hp, max: x.max, shiny: x.shiny, egg: x.egg, item: x.item, id: `${x.pid.toString(16)}.${x.ot.toString(16)}`, met: x.met })),
+      partyLive, map: [ew[b1 + 4], ew[b1 + 5]], here: null,
     };
   }
 
@@ -248,17 +255,21 @@
     if (o + size > h.length) return null;
     const pid = u32(h, o), chk = u16(h, o + 6);
     if (!pid && !chk) return null;
+    if (u16(h, o + 4) & 7) return null; // the game is editing this Pokémon right now (decrypted in place): try again next time
     const d = new Uint8Array(128);
     let seed = chk, sum = 0;
     for (let i = 0; i < 128; i += 2) { seed = lcg(seed); const v = (u16(h, o + 8 + i) ^ (seed >>> 16)) & 0xFFFF; d[i] = v & 255; d[i + 1] = v >> 8; sum = (sum + v) & 0xFFFF; }
     if (sum !== chk) return null;
-    const ord = ABCD[((pid >>> 13) & 31) % 24], a = ord.indexOf("A") * 32, b = ord.indexOf("B") * 32;
+    const ord = ABCD[((pid >>> 13) & 31) % 24], a = ord.indexOf("A") * 32, b = ord.indexOf("B") * 32, dd = ord.indexOf("D") * 32;
     const sp = u16(d, a), item = u16(d, a + 2), tid = u16(d, a + 4), sid = u16(d, a + 6);
     const st = new Uint8Array(20); seed = pid;
     for (let i = 0; i < 20; i += 2) { seed = lcg(seed); const v = (u16(h, o + 0x88 + i) ^ (seed >>> 16)) & 0xFFFF; st[i] = v & 255; st[i + 1] = v >> 8; }
     const lv = st[4], hp = u16(st, 6), max = u16(st, 8);
     if (!sp || sp > 700 || lv < 1 || lv > 100 || hp > max || max > 999) return null;
-    return { sp, item, lv, hp, max, egg: !!((u32(d, b + 0x10) >>> 30) & 1), shiny: ((tid ^ sid ^ (pid & 0xFFFF) ^ (pid >>> 16)) & 0xFFFF) < 8 };
+    // met location: Gen 4 Pt/HGSS "extended" field (0x46) if set, else the original one (0x80)
+    const met = u16(d, b + 0x1E) || u16(d, dd + 0x18);
+    return { sp, item, lv, hp, max, egg: !!((u32(d, b + 0x10) >>> 30) & 1), shiny: ((tid ^ sid ^ (pid & 0xFFFF) ^ (pid >>> 16)) & 0xFFFF) < 8,
+      id: `${pid.toString(16)}.${tid.toString(16)}${sid.toString(16)}`, met };
   }
   /** Shape checks for a DS save image at base `b`: Pokédex magic, a terminated name, sane numbers, a valid party. */
   function dsCheck(h, b, L) {
@@ -294,7 +305,7 @@
     return {
       gen: L.gen, playSeconds: u16(h, b + L.time) * 3600 + h[b + L.time + 2] * 60 + h[b + L.time + 3], clock: h[b + L.time + 3],
       owned, seen: seenSet.size, badges: popcount(badgeBits), badgeBits, champion: !!L.kanto && h[b + L.kanto] > 0,
-      money: u32(h, b + L.money), coins: null, party, partyLive: true, map: null,
+      money: u32(h, b + L.money), coins: null, party, partyLive: true, map: null, here: null,
     };
   }
 

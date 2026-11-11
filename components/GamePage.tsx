@@ -10,6 +10,7 @@ import { BottomBar, H, Modal, PromptModal, type Push } from "./Shell";
 import { focusFirst, useNavEvent } from "./nav";
 import CoverPicker from "./CoverPicker";
 import { sfx } from "./sfx";
+import { RunsTab } from "./Runs";
 
 type Hist = SaveVersion & { shotUrl?: string | null };
 type M = Omit<SaveMeta, "history"> & { history: Hist[] };
@@ -51,22 +52,23 @@ function AchievementList({ set, unlocked, onReset, beta }: { set: Achievement[];
 }
 
 /** Game details page: hero banner, Play bar, Cloud Saves / Game Info tabs. */
-export default function GamePage({ rom, onClose, onPlay, onChanged, toast }: {
-  rom: RomView; onClose: () => void; onPlay: () => void; onChanged: (deleted?: boolean) => void; toast: Push;
+type Tab = "saves" | "runs" | "ach" | "info";
+export default function GamePage({ rom, onClose, onPlay, onChanged, toast, initialTab }: {
+  rom: RomView; onClose: () => void; onPlay: (runId?: string) => void; onChanged: (deleted?: boolean) => void; toast: Push; initialTab?: Tab;
 }) {
   const [meta, setMeta] = useState<M | null>(null);
-  const [tab, setTab] = useState<"saves" | "ach" | "info">("saves");
+  const [tab, setTab] = useState<Tab>(initialTab ?? "saves");
   const set = achievementsFor(rom);
   const game = gameFor(rom);
   const [unlocked, setUnlocked] = useState<Record<string, number> | null>(null);
-  const tabsOrder = (set ? ["saves", "ach", "info"] : ["saves", "info"]) as ("saves" | "ach" | "info")[];
+  const tabsOrder = (set ? ["saves", "runs", "ach", "info"] : ["saves", "runs", "info"]) as Tab[];
   const [modal, setModal] = useState<null | "rename" | "delete" | "cover" | "reset-ach" | { restore: Hist }>(null);
   const coverInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     api<{ meta: M }>(`/api/saves/${rom.id}`).then((r) => setMeta(r.meta)).catch(() => setMeta({ current: null, history: [], playSeconds: 0 }));
     if (set) api<{ unlocked: Record<string, number> }>(`/api/achievements/${rom.id}`).then((r) => setUnlocked(r.unlocked)).catch(() => setUnlocked({}));
-    setTimeout(() => focusFirst(".gamepage .btn.play"), 40);
+    setTimeout(() => focusFirst(initialTab === "runs" ? ".gamepage .runcard" : ".gamepage .btn.play"), 40);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rom.id]);
   useNavEvent("nav:back", () => { if (!modal) onClose(); }, [modal, onClose]);
@@ -98,7 +100,7 @@ export default function GamePage({ rom, onClose, onPlay, onChanged, toast }: {
       </div>
 
       <div className="gp-bar">
-        <button data-nav className="btn play" onClick={onPlay}><Icon name="play" size={26} />{cur ? "Continue" : "Play"}</button>
+        <button data-nav className="btn play" onClick={() => onPlay()}><Icon name="play" size={26} />{cur ? "Continue" : "Play"}</button>
         <div className="gp-stat"><small>Last played</small><b>{cur ? ago(cur.updatedAt) : "Never"}</b></div>
         <div className="gp-stat"><small>Play time</small><b>{playtime(meta?.playSeconds)} hours</b></div>
         <div className="gp-stat"><small>Cloud</small><b className="ok"><Icon name="cloudok" size={20} />{cur ? "Synced" : "No saves"}</b></div>
@@ -113,6 +115,7 @@ export default function GamePage({ rom, onClose, onPlay, onChanged, toast }: {
         <span className="shoulder"><kbd className="key">Q</kbd><span className="glyph sq">L</span></span>
         <div className="tablist">
           <button className={`tab ${tab === "saves" ? "on" : ""}`} onClick={() => setTab("saves")}>Cloud Saves<span className="count">{saves.length}</span></button>
+          <button className={`tab ${tab === "runs" ? "on" : ""}`} onClick={() => setTab("runs")}>Playthroughs</button>
           {set && <button className={`tab ${tab === "ach" ? "on" : ""}`} onClick={() => setTab("ach")}>Achievements<span className="count">{unlocked ? Object.keys(unlocked).length : 0} / {set.length}</span></button>}
           <button className={`tab ${tab === "info" ? "on" : ""}`} onClick={() => setTab("info")}>Game Info</button>
         </div>
@@ -135,6 +138,7 @@ export default function GamePage({ rom, onClose, onPlay, onChanged, toast }: {
             ))}
           </div>
         ))}
+        {tab === "runs" && <RunsTab rom={rom} onPlay={onPlay} toast={toast} />}
         {tab === "ach" && set && <AchievementList set={set} unlocked={unlocked ?? {}} beta={!game?.verified} onReset={() => setModal("reset-ach")} />}
         {tab === "info" && (
           <div className="gp-info">

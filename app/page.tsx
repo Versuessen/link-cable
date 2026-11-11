@@ -23,6 +23,7 @@ export default function Home() {
   const [focused, setFocused] = useState<RomView | null>(null);
   const [view, setView] = useState<View>("home");
   const [open, setOpen] = useState<RomView | null>(null);
+  const [openTab, setOpenTab] = useState<"runs" | undefined>();
   const [menu, setMenu] = useState<MenuAnchor | null>(null);
   const [search, setSearch] = useState(false);
   const [timeline, setTimeline] = useState<TimelineItem[] | null>(null);
@@ -46,9 +47,17 @@ export default function Home() {
   const loadTimeline = useCallback(() => api<{ items: TimelineItem[] }>("/api/timeline").then((r) => setTimeline(r.items)).catch(() => setTimeline([])), []);
 
   useEffect(() => {
-    load().then((list) => { setFocused(list[0] ?? null); setTimeout(() => focusFirst(".carousel [data-nav]"), 80); })
+    load().then((list) => {
+      setFocused(list[0] ?? null); setTimeout(() => focusFirst(".carousel [data-nav]"), 80);
+      // back from a playthrough → reopen that game's Playthroughs tab
+      const q = new URLSearchParams(location.search), g = list.find((r) => r.id === q.get("game"));
+      if (g) { setOpenTab(q.get("tab") === "runs" ? "runs" : undefined); setOpen(g); history.replaceState(null, "", "/"); }
+    })
       .catch((e) => toasts.push({ title: "Couldn't reach your PC", text: e.message, error: true, icon: "wifioff" }));
     loadTimeline();
+    api<{ invites: { name: string; region: string; players: { uid: string; name: string }[]; owner: string }[] }>("/api/runs").then((r) => {
+      for (const i of r.invites) toasts.push({ title: `${i.players.find((p) => p.uid === i.owner)?.name ?? "A friend"} invited you to a Soul Link`, text: `Open a game of the same region → Playthroughs to join "${i.name}"`, icon: "link" }, 9000);
+    }).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -141,7 +150,7 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const play = (r: RomView) => { sfx("open"); router.push(`/play/${r.id}`); };
+  const play = (r: RomView, run?: string) => { sfx("open"); router.push(`/play/${r.id}${run ? `?run=${run}` : ""}`); };
   const pick = addGame;
   const recent = roms?.slice(0, 10) ?? [];
   const dock: { icon: string; label: string; onClick: () => void; color: string }[] = [
@@ -232,8 +241,8 @@ export default function Home() {
       {dragging && <div className="scrim drop"><div className="dropzone big"><Icon name="plus" size={56} /><strong>Drop to add</strong></div></div>}
 
       {open && (
-        <GamePage rom={open} onClose={() => { const id = open.id; setOpen(null); setTimeout(() => focusFirst(`[data-rom="${id}"]`), 40); }}
-          onPlay={() => play(open)} toast={toasts.push}
+        <GamePage rom={open} onClose={() => { const id = open.id; setOpen(null); setOpenTab(undefined); setTimeout(() => focusFirst(`[data-rom="${id}"]`), 40); }}
+          onPlay={(run) => play(open, run)} toast={toasts.push} initialTab={openTab}
           onChanged={async (deleted) => {
             const list = await load(); loadTimeline();
             if (deleted) { setOpen(null); setFocused(list[0] ?? null); setTimeout(() => focusFirst(".view [data-nav], .carousel [data-nav]"), 50); }

@@ -137,3 +137,15 @@ Every reading is checked for consistency and has to repeat before anything unloc
 | FireRed / LeafGreen | confirmed on a real cartridge |
 | Red / Blue / Yellow, Gold / Silver / Crystal, Ruby / Sapphire / Emerald, Diamond / Pearl / Platinum, HeartGold / SoulSilver, Black / White / Black 2 / White 2 | beta: tested with synthetic test cartridges only |
 | Japanese Gen 1/2 | not supported (different memory layout) |
+
+## Playthroughs: Nuzlocke, Soul Link, randomizer
+Each game can have any number of playthroughs next to its main save (game page → **Playthroughs**). Every playthrough has its own cloud saves (`<game>-r-<run>`), so a Nuzlocke, a randomized run and your regular save never touch each other.
+
+- **Normal:** just a separate save slot.
+- **Nuzlocke:** tracked live from the same game-state reading the achievements use. The first Pokémon in each area counts; later catches there are flagged. A Pokémon at 0 HP is marked dead. Optional dupes clause, shiny clause and level caps (the next Gym Leader's ace). If an encounter fled or fainted, mark the area as used on the board.
+- **Soul Link:** a Nuzlocke with up to 3 friends. They get an invite and join with their own copy of a game from the same region. Catches from the same area are linked; when one faints, its partner is marked dead too. Optional type clause.
+- **Randomizer** (Game Boy / Game Boy Color / GBA): wild Pokémon (random, similar strength, or 1:1 swap), and for GBA games trainer teams and starters too. It runs in the browser before the game boots, from a seed, so every device and every Soul Link partner gets the same game without storing a second ROM. Tables are found by their structure; anything that can't be identified is left as it was. Randomized playthroughs don't earn achievements.
+
+While playing, the playthrough chip (top right) opens the board: team, areas or links, graveyard and log.
+
+Run data lives in `shared/runs/<id>/`: `meta.json` holds the settings and players, and each player writes only their own `p-<uid>.json`.

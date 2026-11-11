@@ -9,7 +9,8 @@ import Icon from "../../../components/Icon";
 import { BottomBar, Clock, H, Modal, Toasts, usePresence, useToasts } from "../../../components/Shell";
 import { focusFirst, useNavEvent } from "../../../components/nav";
 import { sfx } from "../../../components/sfx";
-import { achievementsFor, newlyUnlocked, totalPoints, type GameState } from "../../../lib/achievements";
+import { achievementsFor, newlyUnlocked, type GameState } from "../../../lib/achievements";
+import { RunBoard, useRun, MODE_LABEL } from "../../../components/RunBoard";
 
 type Status = { running: boolean; saving: boolean; paused: boolean; lastSyncAt: number; blocked: boolean; dirty: boolean };
 type Sync = { save: (r?: string) => Promise<any>; forceSave: () => Promise<any>; pullLatest: (v?: string) => Promise<boolean>; status: () => Status; pause: () => void; play: () => void };
@@ -28,11 +29,19 @@ export default function Play({ params }: { params: Promise<{ id: string }> }) {
   const [chip, setChip] = useState(true);
   const toasts = useToasts();
   usePresence(rom?.title);
+  // ---- playthroughs: ?run=<id> plays that run's own saves and feeds its tracker
+  const [runId, setRunId] = useState<string | null>(null);
+  const [runReady, setRunReady] = useState(false);
+  useEffect(() => { const r = new URLSearchParams(location.search).get("run"); setRunId(r && /^[a-z0-9]{8}$/.test(r) ? r : null); setRunReady(true); }, []);
+  const run = useRun(runId);
+  const [board, setBoard] = useState(false);
+  const runRef = useRef(run); runRef.current = run;
   // ---- in-game achievements: the emulator page reports the game's state, we decide what just unlocked
   const ach = useRef<{ have: Record<string, number> | null; prev: GameState | null; busy: boolean; migrate: boolean }>({ have: null, prev: null, busy: false, migrate: false });
   const [achCount, setAchCount] = useState(0);
   const [reader, setReader] = useState<{ note: string; tracking: boolean; supported: boolean } | null>(null);
-  const set = rom ? achievementsFor(rom) : null;
+  // randomized runs don't earn achievements (the game isn't the one they describe)
+  const set = rom && !(runId && (!run.meta || run.meta.random)) ? achievementsFor(rom) : null;
   const sessionStart = useRef(Date.now());
   useEffect(() => {
     if (!set) return;
@@ -94,7 +103,18 @@ export default function Play({ params }: { params: Promise<{ id: string }> }) {
         case "conflict": sync()?.pause(); setConflict(d.current); break;
         case "error": setError({ message: d.message, fatal: d.fatal }); break;
         case "menu": openOverlay(); break;
-        case "game-state": onStateRef.current(d.state); break;
+        case "game-state": {
+          onStateRef.current(d.state);
+          const R = runRef.current;
+          if (R.meta && d.state?.party && d.state.partyLive !== false) {
+            for (const a of R.feed(d.state)) {
+              if (a.big) sfx("error");
+              toasts.push({ title: a.text, icon: a.kind === "death" || a.kind === "link" ? "flame" : a.kind === "catch" ? "star" : "info", error: a.kind === "death" || a.kind === "link" }, a.big ? 8000 : 4500);
+            }
+          }
+          break;
+        }
+        case "randomized": toasts.push({ title: "Randomized", text: `Seed ${d.seed}${d.log?.length ? " · " + d.log.slice(0, 2).join(" · ") : ""}`, icon: "auto" }, 6000); break;
         case "reader-status": setReader(d); break;
         case "auth": location.href = `/login?next=/play/${id}`; break;
       }
@@ -133,7 +153,7 @@ export default function Play({ params }: { params: Promise<{ id: string }> }) {
       await new Promise((res) => setTimeout(res, 600));
     }
     leaving.current = true;
-    router.push("/");
+    router.push(runId ? `/?game=${id}&tab=runs` : "/");
   }
 
   const s = status;
@@ -142,12 +162,20 @@ export default function Play({ params }: { params: Promise<{ id: string }> }) {
 
   return (
     <main className="playview" style={{ ["--tint" as any]: tint(rom) }} {...(inGame ? { "data-nav-off": "" } : {})}>
-      <iframe ref={frame} src={`/player.html?id=${encodeURIComponent(id)}`} title="emulator" allow="autoplay; fullscreen; gamepad" />
+      {runReady && <iframe ref={frame} src={`/player.html?id=${encodeURIComponent(id)}${runId ? `&run=${runId}` : ""}`} title="emulator" allow="autoplay; fullscreen; gamepad" />}
 
       <button className={`status-chip px-frame ${chip || s?.saving ? "show" : ""}`} onClick={openOverlay}>
         <Icon name="home" size={18} /><span>Menu</span><i />
         <Icon name={s?.saving ? "sync" : "cloudok"} size={18} className={s?.saving ? "spin" : "ok"} /><span>{syncText}</span>
       </button>
+      {run.meta && (
+        <button className={`run-chip px-frame ${chip || board ? "show" : ""}`} onClick={() => { setBoard((b) => !b); sfx("tab"); }}>
+          <Icon name="layers" size={18} /><span>{MODE_LABEL[run.meta.mode]}{run.meta.name ? ` · ${run.meta.name}` : ""}</span>
+        </button>
+      )}
+      {run.meta && board && (
+        <aside className="run-side"><button className="run-side-x" aria-label="Close board" onClick={() => { setBoard(false); frame.current?.focus(); }}><Icon name="close" size={18} /></button><RunBoard run={run} compact /></aside>
+      )}
 
       {boot && (
         <div className="launch">
@@ -175,6 +203,7 @@ export default function Play({ params }: { params: Promise<{ id: string }> }) {
               <>
                 <button data-nav data-autofocus className="drawer-item" onClick={closeOverlay}><Icon name="play" size={26} />Resume game</button>
                 <button data-nav className="drawer-item" onClick={async () => { const r = await sync()?.save("manual"); if (r?.unchanged) toasts.push({ title: "Already up to date", icon: "cloudok" }, 1600); }}><Icon name="cloudup" size={26} />Save to cloud</button>
+                {run.meta && <button data-nav className="drawer-item" onClick={() => { setBoard(true); closeOverlay(); }}><Icon name="layers" size={26} />Playthrough board</button>}
                 <div className="drawer-sep" />
                 <button data-nav className="drawer-item" onClick={() => exit(true)}><Icon name="home" size={26} />Save &amp; quit</button>
                 <button data-nav className="drawer-item danger" onClick={() => exit(false)}><Icon name="power" size={26} />Quit without saving</button>
