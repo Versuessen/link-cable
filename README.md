@@ -121,3 +121,10 @@ The mouse and touch work everywhere too; hovering moves the console focus. In-ga
 ## Notes
 - Only upload ROMs you dumped from cartridges you own. Keep the password to yourself; this is a private locker, not a share link.
 - DS runs fine on desktop and is heavier on phones.
+
+## In-game achievements
+While a supported game runs, a small reader inside the emulator page (`public/ach-reader.js`) watches the game's memory and reports the trainer's progress (badges, Pokédex, money, play time, party). The site checks that against the game's achievement list (`lib/achievements.ts`), shows a pop-up the moment something unlocks, and stores it per account and per game. The game page has an Achievements tab.
+
+- Supported now: Ruby, Sapphire, Emerald, FireRed, LeafGreen (all languages).
+- Tracking starts after the first in-game save, because the reader finds the game's data by looking for your trainer name and ID from the cartridge save.
+- Achievement points also count towards your account level (5 XP per point).

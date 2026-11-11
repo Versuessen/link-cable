@@ -9,6 +9,7 @@ import Icon from "../../../components/Icon";
 import { BottomBar, Clock, H, Modal, Toasts, usePresence, useToasts } from "../../../components/Shell";
 import { focusFirst, useNavEvent } from "../../../components/nav";
 import { sfx } from "../../../components/sfx";
+import { achievementsFor, newlyUnlocked, totalPoints, type GameState } from "../../../lib/achievements";
 
 type Status = { running: boolean; saving: boolean; paused: boolean; lastSyncAt: number; blocked: boolean; dirty: boolean };
 type Sync = { save: (r?: string) => Promise<any>; forceSave: () => Promise<any>; pullLatest: (v?: string) => Promise<boolean>; status: () => Status; pause: () => void; play: () => void };
@@ -27,6 +28,32 @@ export default function Play({ params }: { params: Promise<{ id: string }> }) {
   const [chip, setChip] = useState(true);
   const toasts = useToasts();
   usePresence(rom?.title);
+  // ---- in-game achievements: the emulator page reports the game's state, we decide what just unlocked
+  const ach = useRef<{ have: Record<string, number> | null; prev: GameState | null; busy: boolean }>({ have: null, prev: null, busy: false });
+  const [achCount, setAchCount] = useState(0);
+  const [reader, setReader] = useState<{ note: string; tracking: boolean; supported: boolean } | null>(null);
+  const set = achievementsFor(rom?.header?.code);
+  useEffect(() => {
+    if (!set) return;
+    fetch(`/api/achievements/${id}`).then((r) => r.json()).then((d) => { ach.current.have = d.unlocked ?? {}; setAchCount(Object.keys(d.unlocked ?? {}).length); }).catch(() => { ach.current.have = {}; });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, !!set]);
+  const onState = (st: GameState) => {
+    const a = ach.current;
+    if (!set || !a.have) return;
+    const fresh = newlyUnlocked(set, st, a.prev, a.have);
+    a.prev = st;
+    if (!fresh.length) return;
+    const now = Date.now();
+    for (const x of fresh) a.have[x.id] = now;
+    setAchCount(Object.keys(a.have).length);
+    sfx("saved");
+    // a long-running save can unlock a whole batch on first contact: one summary instead of a wall of pop-ups
+    if (fresh.length > 3) toasts.push({ title: `${fresh.length} achievements unlocked`, text: `+${fresh.reduce((n, x) => n + x.points, 0)} points · see them on the game page`, icon: "star", gold: true }, 7000);
+    else fresh.forEach((x, i) => setTimeout(() => toasts.push({ title: x.title, text: `${x.desc} · +${x.points}`, icon: "star", gold: true }, 6500), i * 900));
+    fetch(`/api/achievements/${id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: fresh.map((x) => x.id) }) }).catch(() => {});
+  };
+  const onStateRef = useRef(onState); onStateRef.current = onState;
   const leaving = useRef(false);
   const sync = () => (frame.current?.contentWindow as any)?.pokeSync as Sync | undefined;
 
@@ -51,6 +78,8 @@ export default function Play({ params }: { params: Promise<{ id: string }> }) {
         case "conflict": sync()?.pause(); setConflict(d.current); break;
         case "error": setError({ message: d.message, fatal: d.fatal }); break;
         case "menu": openOverlay(); break;
+        case "game-state": onStateRef.current(d.state); break;
+        case "reader-status": setReader(d); break;
         case "auth": location.href = `/login?next=/play/${id}`; break;
       }
     };
@@ -133,6 +162,7 @@ export default function Play({ params }: { params: Promise<{ id: string }> }) {
                 <div className="drawer-sep" />
                 <button data-nav className="drawer-item" onClick={() => exit(true)}><Icon name="home" size={26} />Save &amp; quit</button>
                 <button data-nav className="drawer-item danger" onClick={() => exit(false)}><Icon name="power" size={26} />Quit without saving</button>
+                {set && <p className="ov-ach"><Icon name="star" size={18} /><b>{achCount} / {set.length}</b> achievements · {reader?.tracking ? "tracking live" : reader?.note ?? "starting"}</p>}
                 <p className="ov-note">Autosaves every 45 s and whenever you leave this tab.{rom?.playSeconds ? ` Total ${playtime(rom.playSeconds)} hrs.` : ""}</p>
               </>
             )}

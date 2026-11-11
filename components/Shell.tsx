@@ -30,7 +30,7 @@ function useBattery() {
 }
 
 export type Me = { id: string; name: string; color: string; owner?: boolean; avatar?: string; colorAuto?: boolean; createdAt?: number;
-  profile?: { flair?: FlairSnapshot | null; playSeconds?: number; saves?: number; nightSaves?: number; earlySaves?: number; devices?: string[]; linkSeconds?: number; bestStreak?: number; dayMax?: number } };
+  profile?: { flair?: FlairSnapshot | null; playSeconds?: number; saves?: number; nightSaves?: number; earlySaves?: number; devices?: string[]; linkSeconds?: number; bestStreak?: number; dayMax?: number; ach?: Record<string, { points: number; count: number; total: number }> } };
 // one shared copy of "me" for every component: one request, instant local updates
 let meCache: Me | null = null, meLoading: Promise<void> | null = null;
 const meSubs = new Set<(m: Me | null) => void>();
@@ -327,12 +327,12 @@ export function QuickMenu({ anchor, onAnchor, onClose, onProfile, onHome }: { an
   );
 }
 
-export type ToastT = { id: number; icon?: string; title: string; text?: string; progress?: number; error?: boolean };
+export type ToastT = { id: number; icon?: string; title: string; text?: string; progress?: number; error?: boolean; gold?: boolean };
 export function Toasts({ items }: { items: ToastT[] }) {
   return (
     <div className="toasts">
       {items.map((t) => (
-        <div key={t.id} className={`toast ${t.error ? "err" : ""}`}>
+        <div key={t.id} className={`toast ${t.error ? "err" : ""} ${t.gold ? "gold" : ""}`}>
           <span className="toast-icon"><Icon name={t.icon ?? "cloudok"} size={24} /></span>
           <div>
             <strong>{t.title}</strong>

@@ -67,6 +67,7 @@ export type Stats = {
   /** seconds with the site open and active */ linkSeconds: number;
   /** longest run of days in a row with a cloud save */ bestStreak: number;
   /** most cloud saves on one day */ dayMaxSaves: number;
+  /** points from in-game achievements, all games */ gamePoints?: number;
 };
 export type Family = {
   id: string; name: string; art: string; desc: (n: number) => string;
@@ -104,7 +105,7 @@ export function evaluate(s: Stats, opts: { all?: boolean } = {}) {
   const others = base.filter((e) => e.family.id !== "completionist" && e.step > 0).length;
   const earned = base.map((e) => (e.family.id === "completionist" ? one(e.family, others) : e));
   const playXp = Math.floor(s.games.reduce((a, g) => a + (g.playSeconds ?? 0), 0) / 60) * 2;
-  const achXp = earned.reduce((a, e) => a + STEP_XP.slice(0, e.step).reduce((x, y) => x + y, 0), 0);
+  const achXp = earned.reduce((a, e) => a + STEP_XP.slice(0, e.step).reduce((x, y) => x + y, 0), 0) + (s.gamePoints ?? 0) * 5;
   return { earned, playXp, achXp, ...levelFor(playXp + achXp) };
 }
 

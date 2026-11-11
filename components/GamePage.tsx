@@ -1,4 +1,5 @@
 "use client";
+import { achievementsFor, totalPoints, CATEGORY_LABEL, type Achievement } from "../lib/achievements";
 import { useEffect, useRef, useState } from "react";
 import type { RomView, SaveMeta, SaveVersion } from "../lib/games";
 import { SYSTEMS } from "../lib/games";
@@ -13,21 +14,60 @@ import { sfx } from "./sfx";
 type Hist = SaveVersion & { shotUrl?: string | null };
 type M = Omit<SaveMeta, "history"> & { history: Hist[] };
 
+function AchievementList({ set, unlocked }: { set: Achievement[]; unlocked: Record<string, number> }) {
+  const got = set.filter((a) => unlocked[a.id]), pts = got.reduce((n, a) => n + a.points, 0), all = totalPoints(set);
+  const cats = (Object.keys(CATEGORY_LABEL) as (keyof typeof CATEGORY_LABEL)[]).map((c) => ({ c, items: set.filter((a) => a.cat === c) })).filter((x) => x.items.length);
+  return (
+    <div className="ach">
+      <div className={`ach-summary ${got.length === set.length ? "mastered" : ""}`}>
+        <span className="ach-ring" style={{ ["--p" as any]: got.length / set.length }}><b>{Math.round((got.length / set.length) * 100)}%</b></span>
+        <span className="ach-sum-text">
+          <strong>{got.length === set.length ? "Mastered" : `${got.length} of ${set.length} unlocked`}</strong>
+          <span>{pts.toLocaleString()} / {all.toLocaleString()} points · unlocks appear while you play{got.length === 0 ? ", after your first in-game save" : ""}</span>
+        </span>
+      </div>
+      {cats.map(({ c, items }) => (
+        <section key={c}>
+          <h3 className="dayline"><span>{CATEGORY_LABEL[c]}</span><em>{items.filter((a) => unlocked[a.id]).length} / {items.length}</em></h3>
+          <div className="ach-grid">
+            {items.map((a) => {
+              const on = !!unlocked[a.id], hide = a.secret && !on;
+              return (
+                <div key={a.id} className={`ach-card ${on ? "on" : ""} cat-${a.cat}`}>
+                  <span className="ach-medal"><Icon name={on ? "star" : hide ? "lock" : "star"} size={22} /></span>
+                  <span className="ach-text"><b>{hide ? "Secret achievement" : a.title}</b><small>{hide ? "Keep playing to find out" : a.desc}</small>
+                    {on && <small className="ach-when">{new Date(unlocked[a.id]).toLocaleDateString()}</small>}</span>
+                  <span className="ach-pts">{a.points}</span>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
 /** Game details page: hero banner, Play bar, Cloud Saves / Game Info tabs. */
 export default function GamePage({ rom, onClose, onPlay, onChanged, toast }: {
   rom: RomView; onClose: () => void; onPlay: () => void; onChanged: (deleted?: boolean) => void; toast: Push;
 }) {
   const [meta, setMeta] = useState<M | null>(null);
-  const [tab, setTab] = useState<"saves" | "info">("saves");
+  const [tab, setTab] = useState<"saves" | "ach" | "info">("saves");
+  const set = achievementsFor(rom.header?.code);
+  const [unlocked, setUnlocked] = useState<Record<string, number> | null>(null);
+  const tabsOrder = (set ? ["saves", "ach", "info"] : ["saves", "info"]) as ("saves" | "ach" | "info")[];
   const [modal, setModal] = useState<null | "rename" | "delete" | "cover" | { restore: Hist }>(null);
   const coverInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     api<{ meta: M }>(`/api/saves/${rom.id}`).then((r) => setMeta(r.meta)).catch(() => setMeta({ current: null, history: [], playSeconds: 0 }));
+    if (set) api<{ unlocked: Record<string, number> }>(`/api/achievements/${rom.id}`).then((r) => setUnlocked(r.unlocked)).catch(() => setUnlocked({}));
     setTimeout(() => focusFirst(".gamepage .btn.play"), 40);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rom.id]);
   useNavEvent("nav:back", () => { if (!modal) onClose(); }, [modal, onClose]);
-  useNavEvent("nav:tab", () => { if (!modal) { sfx("tab"); setTab((t) => (t === "saves" ? "info" : "saves")); } }, [modal]);
+  useNavEvent("nav:tab", (d: number) => { if (!modal) { sfx("tab"); setTab((t) => tabsOrder[(tabsOrder.indexOf(t) + (d || 1) + tabsOrder.length) % tabsOrder.length]); } }, [modal, tabsOrder.length]);
 
   async function setCover(file: File) {
     const t = toast({ title: "Uploading cover…", text: file.name, progress: 0, icon: "image" }, 0);
@@ -70,6 +110,7 @@ export default function GamePage({ rom, onClose, onPlay, onChanged, toast }: {
         <span className="shoulder"><kbd className="key">Q</kbd><span className="glyph sq">L</span></span>
         <div className="tablist">
           <button className={`tab ${tab === "saves" ? "on" : ""}`} onClick={() => setTab("saves")}>Cloud Saves<span className="count">{saves.length}</span></button>
+          {set && <button className={`tab ${tab === "ach" ? "on" : ""}`} onClick={() => setTab("ach")}>Achievements<span className="count">{unlocked ? Object.keys(unlocked).length : 0} / {set.length}</span></button>}
           <button className={`tab ${tab === "info" ? "on" : ""}`} onClick={() => setTab("info")}>Game Info</button>
         </div>
         <span className="shoulder"><kbd className="key">E</kbd><span className="glyph sq">R</span></span>
@@ -91,6 +132,7 @@ export default function GamePage({ rom, onClose, onPlay, onChanged, toast }: {
             ))}
           </div>
         ))}
+        {tab === "ach" && set && <AchievementList set={set} unlocked={unlocked ?? {}} />}
         {tab === "info" && (
           <div className="gp-info">
             <div className="gp-cover"><Art rom={rom} prefer="cover" /></div>

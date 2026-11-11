@@ -282,7 +282,8 @@ function LabsSection({ me, roms, timeline }: { me: ReturnType<typeof useMe>; rom
     devices: Math.max(prof.devices?.length ?? 0, new Set(timeline.map((t) => t.device)).size),
     accountDays: me?.createdAt ? Math.floor((Date.now() - me.createdAt) / 86400000) : 0, users, owner: !!me?.owner,
     linkSeconds: prof.linkSeconds ?? 0, bestStreak: prof.bestStreak ?? 0, dayMaxSaves: prof.dayMax ?? 0,
-  }), [roms, timeline, prof.saves, prof.nightSaves, prof.earlySaves, prof.devices, prof.linkSeconds, prof.bestStreak, prof.dayMax, me?.createdAt, me?.owner, users]);
+    gamePoints: Object.values(prof.ach ?? {}).reduce((a, x) => a + x.points, 0),
+  }), [prof.ach, roms, timeline, prof.saves, prof.nightSaves, prof.earlySaves, prof.devices, prof.linkSeconds, prof.bestStreak, prof.dayMax, me?.createdAt, me?.owner, users]);
   const real = useMemo(() => evaluate(stats), [stats]);
   // Test mode: pretend to be any level / own every badge. Local to this browser, never published, gone when switched off.
   const testing = prefs.devLevel != null || prefs.devAll;

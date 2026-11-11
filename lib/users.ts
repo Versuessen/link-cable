@@ -106,7 +106,7 @@ export async function deleteUser(uid: string) {
 }
 
 // ---------------------------------------------------------------- per-user profile (stats + flair), its own file → no cross-user write races
-export type Profile = { day?: { d: string; n: number }; streak?: number; bestStreak?: number; dayMax?: number; playSeconds?: number; saves?: number; nightSaves?: number; earlySaves?: number; devices?: string[]; flair?: { level: number; frame?: string; badge?: { id: string; step: number } | null } };
+export type Profile = { ach?: Record<string, { points: number; count: number; total: number }>; day?: { d: string; n: number }; streak?: number; bestStreak?: number; dayMax?: number; playSeconds?: number; saves?: number; nightSaves?: number; earlySaves?: number; devices?: string[]; flair?: { level: number; frame?: string; badge?: { id: string; step: number } | null } };
 export const profileKey = (u: Pick<User, "prefix">) => `${u.prefix}profile.json`;
 export const getProfile = async (u: Pick<User, "prefix">) => (await getJson<Profile>(profileKey(u))) ?? {};
 export async function patchProfile(u: Pick<User, "prefix">, patch: Partial<Profile>) {

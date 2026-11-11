@@ -11,6 +11,7 @@
 </head>
 <body>
 <div id="game"></div>
+<script src="/ach-reader.js"></script>
 <script>
 /*
  * PokéPC player host.
@@ -176,6 +177,7 @@
     emit("loading-save");
     applySave(await downloadSave(body.save));
     S.baseVer = body.meta.current?.ver; S.blocked = false; S.lastHash = { state: "", sram: "" };
+    try { window.LCReader.reset(); } catch (e) {}
     emit("loaded-save", { save: body.save, meta: body.meta });
     return true;
   }
@@ -252,6 +254,7 @@
           applySave(remote);
           S.running = true; S.lastSyncAt = Date.now(); S.playedSince = Date.now();
           emit("started", { hadSave: !!(remote.state || remote.sram), meta: saveRes.body.meta });
+          try { window.LCReader.start(body.rom.header && body.rom.header.code); } catch (e) { console.warn(e); }
         },
       });
       const s = document.createElement("script");
